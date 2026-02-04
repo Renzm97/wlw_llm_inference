@@ -1,0 +1,24 @@
+# ========== 轻量 LLM 推理核心模块 - 依赖清单 ==========
+# Python 版本要求: 3.10+
+
+# ---------- 必装依赖（核心 + 接口层） ----------
+# 推理核心与基础工具
+pydantic>=2.0.0
+# FastAPI 接口层
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+# HTTP 客户端（用于 API 测试示例）
+requests>=2.31.0
+
+# ---------- Ollama 引擎（可选，使用 Ollama 时安装） ----------
+# ollama>=0.1.0   # 官方 ollama-python，若不可用可用下面
+# 若 ollama 包不可用，可使用 httpx 调用 Ollama HTTP API
+httpx>=0.25.0
+
+# ---------- VLLM 引擎（可选，使用 VLLM 时安装） ----------
+# vllm>=0.2.0
+# 注意：VLLM 依赖 CUDA/PyTorch，建议在 GPU 环境中单独安装
+
+# ---------- SGLang 引擎（可选，使用 SGLang 时安装） ----------
+# sglang[all]>=0.1.0
+# 注意：SGLang 依赖 CUDA，建议在 GPU 环境中单独安装
