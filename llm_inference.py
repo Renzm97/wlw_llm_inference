@@ -221,7 +221,7 @@ class OllamaAdapter(BaseLLMAdapter):
             ollama.list()
         except Exception as e:
             raise EngineNotRunningError(f"Ollama 服务未就绪: {e}")
-        models = [m["name"] for m in ollama.list().get("models", [])]
+        models = [(m.get("model") or m.get("name") or "") for m in ollama.list().get("models", [])]
         if model_name not in models and not any(
             m.startswith(model_name) or model_name in m for m in models
         ):
@@ -744,7 +744,7 @@ if FASTAPI_AVAILABLE:
         prompt: str = Field(..., min_length=1)
         engine_type: Literal["sglang"] = Field(...)
         model_name: str = Field(default="llama3.2", min_length=1)
-        schema: Optional[Dict[str, Any]] = None
+        response_schema: Optional[Dict[str, Any]] = Field(None, alias="schema")
         temperature: float = Field(default=0.7, ge=0, le=2)
         max_tokens: int = Field(default=1024, gt=0)
         top_p: float = Field(default=0.95, ge=0, le=1)
@@ -921,7 +921,7 @@ if FASTAPI_AVAILABLE:
                 inferencer = _make_inferencer("sglang", body.model_name)
                 result = inferencer.structured_generate(
                     body.prompt,
-                    schema=body.schema,
+                    schema=body.response_schema,
                     temperature=body.temperature,
                     max_tokens=body.max_tokens,
                     top_p=body.top_p,
