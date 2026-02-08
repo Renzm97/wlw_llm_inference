@@ -1,0 +1,86 @@
+[2026-02-08 20:10:30] INFO inference_core.py:103: 模型目录: 根目录=/pub/data/jiafq/rzm/project/wlw_llm_inference/models, Ollama=/pub/data/jiafq/rzm/project/wlw_llm_inference/models/ollama, HF=/pub/data/jiafq/rzm/project/wlw_llm_inference/models/HF
+[2026-02-08 20:10:30] INFO inference_core.py:113: 已从 config 设置 HF_TOKEN（用于 gated/私有模型）
+[2026-02-08 20:10:30] INFO llm_inference.py:982: 启动 API 服务: 0.0.0.0:8000
+INFO:     Started server process [2834315]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+[2026-02-08 20:10:39] INFO llm_inference.py:459: request_id=f733cb99-35e4-4ade-a156-6e280bada1a4 path=/ status=200
+INFO:     127.0.0.1:43582 - "GET / HTTP/1.1" 200 OK
+[2026-02-08 20:10:39] INFO llm_inference.py:459: request_id=cabe6c71-c43e-404c-b9ef-f15facf8f834 path=/.well-known/appspecific/com.chrome.devtools.json status=404
+INFO:     127.0.0.1:43582 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 Not Found
+[2026-02-08 20:10:39] INFO llm_inference.py:459: request_id=7fda8c3d-88c3-4d72-9d59-ca06879bc84f path=/css/style.css status=200
+INFO:     127.0.0.1:43596 - "GET /css/style.css HTTP/1.1" 200 OK
+[2026-02-08 20:10:39] INFO llm_inference.py:459: request_id=ed4f8849-672d-4d00-b092-537a44842a3c path=/js/app.js status=200
+INFO:     127.0.0.1:43606 - "GET /js/app.js HTTP/1.1" 200 OK
+[2026-02-08 20:10:39] INFO llm_inference.py:459: request_id=bcd4103e-388a-4ea8-bee4-52698fdaf7cd path=/api/v1/models status=200
+INFO:     127.0.0.1:43606 - "GET /api/v1/models HTTP/1.1" 200 OK
+[2026-02-08 20:10:39] INFO llm_inference.py:459: request_id=31ab8300-7b78-43a1-b9c6-3d5935cbc68e path=/api/v1/models/running status=200
+INFO:     127.0.0.1:43596 - "GET /api/v1/models/running HTTP/1.1" 200 OK
+[2026-02-08 20:10:39] INFO llm_inference.py:459: request_id=d9f44bd2-ee1e-4850-b7c5-6e7ea25a3111 path=/favicon.ico status=404
+INFO:     127.0.0.1:43596 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+[2026-02-08 20:10:58] INFO llm_inference.py:162: [Ollama 启动] run_id=4708b0ba-791a-4bb4-91f5-620dbd222c8c base_url=http://localhost:11434 model=qwen2:0.5b 开始检查服务
+[2026-02-08 20:10:58] INFO llm_inference.py:185: [Ollama 启动] run_id=4708b0ba-791a-4bb4-91f5-620dbd222c8c 已登记 RUNNING_INSTANCES，当前总数=1
+[2026-02-08 20:10:58] INFO llm_inference.py:187: [Ollama 启动] run_id=4708b0ba-791a-4bb4-91f5-620dbd222c8c 正在检查/拉取模型…
+[2026-02-08 20:10:58] INFO llm_inference.py:84: [Ollama] /api/tags 成功 base_url=http://localhost:11434 已有模型: ['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:10:58] INFO llm_inference.py:117: [Ollama] 模型已就绪 base_url=http://localhost:11434 model=qwen2:0.5b
+[2026-02-08 20:10:58] INFO llm_inference.py:190: [Ollama 启动] run_id=4708b0ba-791a-4bb4-91f5-620dbd222c8c 正在创建 LLMInferencer…
+[2026-02-08 20:10:58] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:10:58] INFO inference_core.py:498: LLMInferencer 初始化成功: engine=ollama, model=qwen2:0.5b
+[2026-02-08 20:10:58] INFO llm_inference.py:196: [Ollama 启动] run_id=4708b0ba-791a-4bb4-91f5-620dbd222c8c LLMInferencer 创建成功，正在验证可用性
+[2026-02-08 20:10:58] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:10:59] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:10:59] INFO llm_inference.py:202: [Ollama 启动] run_id=4708b0ba-791a-4bb4-91f5-620dbd222c8c 已设置 inferencer，RUNNING_INSTANCES 保留
+[2026-02-08 20:10:59] INFO llm_inference.py:211: 已启动 Ollama 模型 uid=4708b0ba-791a-4bb4-91f5-620dbd222c8c model=qwen2:0.5b address=http://localhost:11434
+[2026-02-08 20:10:59] INFO llm_inference.py:459: request_id=8ad1e44d-a699-4052-8eac-358762eb39d5 path=/api/v1/models/start status=200
+INFO:     127.0.0.1:59162 - "POST /api/v1/models/start HTTP/1.1" 200 OK
+[2026-02-08 20:11:09] INFO llm_inference.py:667: request_id=74da12fa-ba49-4d80-81bd-552e9c5e86e3 engine=ollama model=qwen2:0.5b messages=1
+[2026-02-08 20:11:09] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:11:09] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:11:10] INFO llm_inference.py:459: request_id=74da12fa-ba49-4d80-81bd-552e9c5e86e3 path=/api/v1/llm/chat status=200
+INFO:     127.0.0.1:47512 - "POST /api/v1/llm/chat HTTP/1.1" 200 OK
+[2026-02-08 20:11:25] INFO llm_inference.py:162: [Ollama 启动] run_id=fee9b8a2-326a-4e71-9b73-e840eb0dc892 base_url=http://localhost:11434 model=qwen2:0.5b 开始检查服务
+[2026-02-08 20:11:25] INFO llm_inference.py:185: [Ollama 启动] run_id=fee9b8a2-326a-4e71-9b73-e840eb0dc892 已登记 RUNNING_INSTANCES，当前总数=2
+[2026-02-08 20:11:25] INFO llm_inference.py:187: [Ollama 启动] run_id=fee9b8a2-326a-4e71-9b73-e840eb0dc892 正在检查/拉取模型…
+[2026-02-08 20:11:25] INFO llm_inference.py:84: [Ollama] /api/tags 成功 base_url=http://localhost:11434 已有模型: ['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:11:25] INFO llm_inference.py:117: [Ollama] 模型已就绪 base_url=http://localhost:11434 model=qwen2:0.5b
+[2026-02-08 20:11:25] INFO llm_inference.py:190: [Ollama 启动] run_id=fee9b8a2-326a-4e71-9b73-e840eb0dc892 正在创建 LLMInferencer…
+[2026-02-08 20:11:25] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:11:25] INFO inference_core.py:498: LLMInferencer 初始化成功: engine=ollama, model=qwen2:0.5b
+[2026-02-08 20:11:25] INFO llm_inference.py:196: [Ollama 启动] run_id=fee9b8a2-326a-4e71-9b73-e840eb0dc892 LLMInferencer 创建成功，正在验证可用性
+[2026-02-08 20:11:25] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:11:25] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:11:26] INFO llm_inference.py:202: [Ollama 启动] run_id=fee9b8a2-326a-4e71-9b73-e840eb0dc892 已设置 inferencer，RUNNING_INSTANCES 保留
+[2026-02-08 20:11:26] INFO llm_inference.py:211: 已启动 Ollama 模型 uid=fee9b8a2-326a-4e71-9b73-e840eb0dc892 model=qwen2:0.5b address=http://localhost:11434
+[2026-02-08 20:11:26] INFO llm_inference.py:459: request_id=429e3caf-0ade-4320-8195-77d29f62c90f path=/api/v1/models/start status=200
+INFO:     127.0.0.1:41220 - "POST /api/v1/models/start HTTP/1.1" 200 OK
+[2026-02-08 20:12:45] INFO llm_inference.py:667: request_id=ed2a3127-c3ff-4e89-b763-0927da44929b engine=ollama model=qwen2:0.5b messages=1
+[2026-02-08 20:12:45] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:12:45] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:12:46] INFO llm_inference.py:459: request_id=ed2a3127-c3ff-4e89-b763-0927da44929b path=/api/v1/llm/chat status=200
+INFO:     127.0.0.1:51626 - "POST /api/v1/llm/chat HTTP/1.1" 200 OK
+[2026-02-08 20:12:55] INFO llm_inference.py:667: request_id=57fc0336-8013-432f-a182-0fcc4089d209 engine=ollama model=qwen2:0.5b messages=1
+[2026-02-08 20:12:55] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:12:55] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:12:56] INFO llm_inference.py:459: request_id=57fc0336-8013-432f-a182-0fcc4089d209 path=/api/v1/llm/chat status=200
+INFO:     127.0.0.1:37926 - "POST /api/v1/llm/chat HTTP/1.1" 200 OK
+[2026-02-08 20:13:35] INFO llm_inference.py:162: [Ollama 启动] run_id=34d1c909-3e64-42f6-80e0-b87216d09b42 base_url=http://localhost:11434 model=llama3.2 开始检查服务
+[2026-02-08 20:13:35] INFO llm_inference.py:185: [Ollama 启动] run_id=34d1c909-3e64-42f6-80e0-b87216d09b42 已登记 RUNNING_INSTANCES，当前总数=3
+[2026-02-08 20:13:35] INFO llm_inference.py:187: [Ollama 启动] run_id=34d1c909-3e64-42f6-80e0-b87216d09b42 正在检查/拉取模型…
+[2026-02-08 20:13:35] INFO llm_inference.py:84: [Ollama] /api/tags 成功 base_url=http://localhost:11434 已有模型: ['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:13:35] INFO llm_inference.py:117: [Ollama] 模型已就绪 base_url=http://localhost:11434 model=llama3.2
+[2026-02-08 20:13:35] INFO llm_inference.py:190: [Ollama 启动] run_id=34d1c909-3e64-42f6-80e0-b87216d09b42 正在创建 LLMInferencer…
+[2026-02-08 20:13:35] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:13:35] INFO inference_core.py:498: LLMInferencer 初始化成功: engine=ollama, model=llama3.2
+[2026-02-08 20:13:35] INFO llm_inference.py:196: [Ollama 启动] run_id=34d1c909-3e64-42f6-80e0-b87216d09b42 LLMInferencer 创建成功，正在验证可用性
+[2026-02-08 20:13:35] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:13:35] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:13:40] INFO llm_inference.py:202: [Ollama 启动] run_id=34d1c909-3e64-42f6-80e0-b87216d09b42 已设置 inferencer，RUNNING_INSTANCES 保留
+[2026-02-08 20:13:40] INFO llm_inference.py:211: 已启动 Ollama 模型 uid=34d1c909-3e64-42f6-80e0-b87216d09b42 model=llama3.2 address=http://localhost:11434
+[2026-02-08 20:13:40] INFO llm_inference.py:459: request_id=93814098-c761-4c2e-bbf2-bab0de885082 path=/api/v1/models/start status=200
+INFO:     127.0.0.1:58512 - "POST /api/v1/models/start HTTP/1.1" 200 OK
+[2026-02-08 20:14:06] INFO llm_inference.py:667: request_id=c828394e-e122-4ffa-871e-2ec3344160c0 engine=ollama model=llama3.2 messages=1
+[2026-02-08 20:14:06] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:14:06] INFO inference_core.py:287: Ollama 已拉取模型列表 base_url=http://localhost:11434 数量=2 列表=['qwen2:0.5b', 'llama3.2:latest']
+[2026-02-08 20:14:10] INFO llm_inference.py:459: request_id=c828394e-e122-4ffa-871e-2ec3344160c0 path=/api/v1/llm/chat status=200
+INFO:     127.0.0.1:42386 - "POST /api/v1/llm/chat HTTP/1.1" 200 OK

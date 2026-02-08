@@ -77,8 +77,11 @@ def _ensure_ollama_running_and_model(
         with httpx.Client(timeout=10.0) as c:
             r = c.get(f"{base_url.rstrip('/')}/api/tags")
             if r.status_code != 200:
+                logger.warning("[Ollama] /api/tags 失败 base_url=%s status=%s", base_url, r.status_code)
                 raise EngineNotRunningError(f"Ollama 服务未就绪: {base_url}")
-            models = [m.get("name", "") for m in r.json().get("models", [])]
+            data = r.json()
+            models = [m.get("name", "") or m.get("model", "") for m in data.get("models", [])]
+            logger.info("[Ollama] /api/tags 成功 base_url=%s 已有模型: %s", base_url, models)
             if not any(
                 name == ollama_model_name or name.startswith(ollama_model_name + ":") or ollama_model_name in name
                 for name in models
@@ -108,9 +111,12 @@ def _ensure_ollama_running_and_model(
                             _report(pct, f"拉取中… {pct}%")
                 proc.wait(timeout=600)
                 if proc.returncode != 0:
+                    logger.warning("[Ollama] ollama pull 失败 model=%s returncode=%s", ollama_model_name, proc.returncode)
                     raise EngineNotRunningError(f"ollama pull 失败: 退出码 {proc.returncode}")
             _report(95, "Ollama 模型就绪")
+            logger.info("[Ollama] 模型已就绪 base_url=%s model=%s", base_url, ollama_model_name)
     except httpx.RequestError as e:
+        logger.warning("[Ollama] 连接失败 base_url=%s: %s", base_url, e)
         raise EngineNotRunningError(f"无法连接 Ollama 服务 {base_url}: {e}")
 
 
@@ -153,9 +159,11 @@ def _start_model_impl(
         ollama_cfg = CONFIG.get("ollama") or {}
         base_url = (ollama_cfg.get("base_url") or "http://localhost:11434").rstrip("/")
         ollama_model_name = entry.get("ollama_name") or model_id
+        logger.info("[Ollama 启动] run_id=%s base_url=%s model=%s 开始检查服务", run_id, base_url, ollama_model_name)
         with httpx.Client(timeout=10.0) as c:
             r = c.get(f"{base_url.rstrip('/')}/api/tags")
             if r.status_code != 200:
+                logger.warning("[Ollama 启动] 服务不可用 base_url=%s status=%s", base_url, r.status_code)
                 raise EngineNotRunningError(f"Ollama 服务未就绪: {base_url}")
         address = base_url
         with _running_lock:
@@ -174,23 +182,30 @@ def _start_model_impl(
                 "thought_mode": thought_mode,
                 "parse_inference": parse_inference,
             }
+        logger.info("[Ollama 启动] run_id=%s 已登记 RUNNING_INSTANCES，当前总数=%s", run_id, len(RUNNING_INSTANCES))
         try:
+            logger.info("[Ollama 启动] run_id=%s 正在检查/拉取模型…", run_id)
             _ensure_ollama_running_and_model(base_url, ollama_model_name, progress_callback=progress_callback)
             _report(98, "正在验证模型…")
+            logger.info("[Ollama 启动] run_id=%s 正在创建 LLMInferencer…", run_id)
             inferencer = LLMInferencer(
                 engine_type="ollama",
                 model_name=ollama_model_name,
                 ollama_base_url=base_url,
             )
+            logger.info("[Ollama 启动] run_id=%s LLMInferencer 创建成功，正在验证可用性", run_id)
             if not validate_model_usable(inferencer, max_tokens=5):
                 logger.warning("Ollama 模型验证未通过，但已登记为运行实例 run_id=%s", run_id)
             with _running_lock:
                 if run_id in RUNNING_INSTANCES:
                     RUNNING_INSTANCES[run_id]["inferencer"] = inferencer
-        except Exception:
+            logger.info("[Ollama 启动] run_id=%s 已设置 inferencer，RUNNING_INSTANCES 保留", run_id)
+        except Exception as e:
+            logger.exception("[Ollama 启动] run_id=%s 启动失败: %s，已从 RUNNING_INSTANCES 移除", run_id, e)
             with _running_lock:
                 if run_id in RUNNING_INSTANCES:
                     del RUNNING_INSTANCES[run_id]
+                    logger.info("[Ollama 启动] run_id=%s 已删除，当前 RUNNING_INSTANCES 总数=%s", run_id, len(RUNNING_INSTANCES))
             raise
         _report(100, "就绪")
         logger.info("已启动 Ollama 模型 uid=%s model=%s address=%s", run_id, ollama_model_name, address)
@@ -248,8 +263,48 @@ def _stop_model_impl(run_id: str) -> bool:
         return existed
 
 
+def _list_ollama_models_from_service() -> List[Dict[str, Any]]:
+    """请求配置的 Ollama 服务 /api/tags，返回可用的模型列表（用于合并到 running 列表展示）。"""
+    ollama_cfg = CONFIG.get("ollama") or {}
+    base_url = (ollama_cfg.get("base_url") or "http://localhost:11434").rstrip("/")
+    try:
+        with httpx.Client(timeout=3.0) as c:
+            r = c.get(f"{base_url}/api/tags")
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            models = data.get("models") or []
+    except Exception as e:
+        logger.debug("获取 Ollama 模型列表失败 base_url=%s: %s", base_url, e)
+        return []
+    items = []
+    for m in models:
+        name = m.get("name") or m.get("model") or ""
+        if not name:
+            continue
+        model_id = name.split(":")[0] if ":" in name else name
+        items.append({
+            "run_id": f"ollama:{name}",
+            "model_id": model_id,
+            "engine_type": "ollama",
+            "model_name": name,
+            "address": base_url,
+            "created_at": time.time(),
+        })
+    return items
+
+
 def _get_running_inferencer(run_id: str) -> Optional[LLMInferencer]:
-    """根据 run_id 获取已注册的 LLMInferencer，不存在返回 None；存在但 inferencer 未就绪则抛错。"""
+    """根据 run_id 获取已注册的 LLMInferencer，不存在返回 None；存在但 inferencer 未就绪则抛错。
+    若 run_id 以 'ollama:' 开头，则按「Ollama 已发现模型」现场创建 Inferencer，不要求曾通过 API 启动。"""
+    if run_id.startswith("ollama:"):
+        model_name = run_id[7:].strip()
+        if not model_name:
+            return None
+        ollama_cfg = CONFIG.get("ollama") or {}
+        base_url = ollama_cfg.get("base_url") or "http://localhost:11434"
+        inf = LLMInferencer(engine_type="ollama", model_name=model_name, ollama_base_url=base_url)
+        return inf
     with _running_lock:
         entry = RUNNING_INSTANCES.get(run_id)
     if not entry:
@@ -517,7 +572,7 @@ if FASTAPI_AVAILABLE:
 
         @app.get("/api/v1/models/running", response_model=ApiResponse)
         async def api_list_running(request: Request):
-            """列出当前运行中的模型实例。"""
+            """列出当前运行中的模型实例（仅包含通过本 API「启动」的实例，不自动发现 Ollama 已拉取模型）。"""
             rid = request.state.request_id
             with _running_lock:
                 items = [
@@ -531,6 +586,7 @@ if FASTAPI_AVAILABLE:
                     }
                     for k, v in RUNNING_INSTANCES.items()
                 ]
+            logger.debug("GET /api/v1/models/running 返回 %s 条", len(items))
             return ApiResponse(request_id=rid, code=200, msg="success", data={"running": items})
 
         @app.post("/api/v1/models/running/{run_id}/stop", response_model=ApiResponse)

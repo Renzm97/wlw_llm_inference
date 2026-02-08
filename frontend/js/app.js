@@ -278,9 +278,9 @@
     const tbody = $('#running-tbody');
     const empty = $('#running-empty');
     const wrap = $('.table-wrap');
-    // LLM 页：显示所有 ollama/vllm/sglang 引擎的运行实例
+    // 运行模型页：语言模型 tab 显示 ollama/vllm/sglang，嵌入 tab 显示嵌入模型
     const list = state.tab === 'llm'
-      ? state.running.filter((r) => ['ollama', 'vllm', 'sglang'].includes(r.engine))
+      ? state.running.filter((r) => r.engine && ['ollama', 'vllm', 'sglang'].includes(String(r.engine).toLowerCase()))
       : state.running.filter((r) => BUILTIN_EMBED.some((m) => m.id === r.modelId));
     if (list.length === 0) {
       tbody.innerHTML = '';
@@ -320,7 +320,11 @@
     state.page = page;
     $$('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
     $$('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + page));
-    if (page === 'running') renderRunningTable();
+    if (page === 'running') {
+      state.tab = 'llm';
+      $$('.tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'llm'));
+      renderRunningTable();
+    }
   }
 
   function setTab(tab) {

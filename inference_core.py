@@ -274,34 +274,34 @@ class OllamaAdapter(BaseLLMAdapter):
             return False
 
     def check_service(self, model_name: str) -> None:
-        if not OLLAMA_AVAILABLE:
-            try:
-                with httpx.Client(timeout=5.0) as c:
-                    r = c.get(f"{self.base_url}/api/tags")
-                    if r.status_code != 200:
-                        raise EngineNotRunningError(f"Ollama 服务未就绪: {self.base_url}")
-                    data = r.json()
-                    names = [m.get("name") for m in data.get("models", [])]
-                    if model_name not in names and not any(m.startswith(model_name) or model_name in m for m in names):
-                        raise ModelNotFoundError(f"模型 '{model_name}' 不在 Ollama 已拉取列表中。可用: {names}。")
-            except httpx.RequestError as e:
-                raise EngineNotRunningError(f"无法连接 Ollama: {e}")
-            return
+        """统一通过 self.base_url 请求 /api/tags，确保使用配置的地址并便于调试。"""
         try:
-            ollama.list()
-        except Exception as e:
-            raise EngineNotRunningError(f"Ollama 服务未就绪: {e}")
-        models = [(m.get("model") or m.get("name") or "") for m in ollama.list().get("models", [])]
-        if model_name not in models and not any(m.startswith(model_name) or model_name in m for m in models):
-            raise ModelNotFoundError(f"模型 '{model_name}' 不存在。可用: {models}。")
+            with httpx.Client(timeout=10.0) as c:
+                r = c.get(f"{self.base_url}/api/tags")
+                logger.debug("Ollama check_service %s -> status=%s", self.base_url, r.status_code)
+                if r.status_code != 200:
+                    raise EngineNotRunningError(f"Ollama 服务未就绪: {self.base_url} (status={r.status_code})")
+                data = r.json()
+                models_list = data.get("models") or []
+                names = [(m.get("model") or m.get("name") or "") for m in models_list]
+                logger.info("Ollama 已拉取模型列表 base_url=%s 数量=%s 列表=%s", self.base_url, len(names), names)
+                if model_name not in names and not any(
+                    n and (n == model_name or n.startswith(model_name + ":") or model_name in n) for n in names
+                ):
+                    raise ModelNotFoundError(f"模型 '{model_name}' 不在 Ollama 已拉取列表中。可用: {names}。")
+        except httpx.RequestError as e:
+            logger.warning("Ollama check_service 连接失败 base_url=%s: %s", self.base_url, e)
+            raise EngineNotRunningError(f"无法连接 Ollama: {e}")
 
     def generate(self, prompt: str, *, model_name: str, temperature: float = 0.7, max_tokens: int = 1024, top_p: float = 0.95, **kwargs: Any) -> str:
         self.check_service(model_name)
-        if OLLAMA_AVAILABLE:
-            opts = {"temperature": temperature, "num_predict": max_tokens, "top_p": top_p, **{k: v for k, v in kwargs.items() if v is not None}}
-            resp = ollama.generate(model=model_name, prompt=prompt, options=opts)
-            return resp.get("response", "").strip()
-        payload = {"model": model_name, "prompt": prompt, "stream": False, "options": {"temperature": temperature, "num_predict": max_tokens, "top_p": top_p}}
+        payload = {
+            "model": model_name,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"temperature": temperature, "num_predict": max_tokens, "top_p": top_p},
+        }
+        logger.debug("Ollama generate base_url=%s model=%s", self.base_url, model_name)
         with httpx.Client(timeout=60.0) as c:
             r = c.post(f"{self.base_url}/api/generate", json=payload)
             r.raise_for_status()
@@ -309,11 +309,13 @@ class OllamaAdapter(BaseLLMAdapter):
 
     def chat(self, messages: List[Dict[str, str]], *, model_name: str, temperature: float = 0.7, max_tokens: int = 1024, top_p: float = 0.95, **kwargs: Any) -> str:
         self.check_service(model_name)
-        if OLLAMA_AVAILABLE:
-            opts = {"temperature": temperature, "num_predict": max_tokens, "top_p": top_p, **{k: v for k, v in kwargs.items() if v is not None}}
-            resp = ollama.chat(model=model_name, messages=[{"role": m["role"], "content": m["content"]} for m in messages], options=opts)
-            return resp.get("message", {}).get("content", "").strip()
-        payload = {"model": model_name, "messages": messages, "stream": False, "options": {"temperature": temperature, "num_predict": max_tokens, "top_p": top_p}}
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": temperature, "num_predict": max_tokens, "top_p": top_p},
+        }
+        logger.debug("Ollama chat base_url=%s model=%s", self.base_url, model_name)
         with httpx.Client(timeout=60.0) as c:
             r = c.post(f"{self.base_url}/api/chat", json=payload)
             r.raise_for_status()
