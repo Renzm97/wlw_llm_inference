@@ -136,7 +136,8 @@ BUILTIN_MODELS: List[Dict[str, Any]] = [
         "hf_repo": "Qwen/Qwen2-0.5B-Instruct",
         "official_url": "https://huggingface.co/Qwen/Qwen2-0.5B-Instruct",
         "quantizations": ["none"],
-        "engines": ["vllm", "sglang"],
+        "engines": ["ollama", "vllm", "sglang"],
+        "ollama_name": "qwen2:0.5b",
     },
     {
         "id": "llama3.2",
@@ -144,7 +145,8 @@ BUILTIN_MODELS: List[Dict[str, Any]] = [
         "hf_repo": "meta-llama/Llama-3.2-1B-Instruct",
         "official_url": "https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct",
         "quantizations": ["none"],
-        "engines": ["vllm", "sglang"],
+        "engines": ["ollama", "vllm", "sglang"],
+        "ollama_name": "llama3.2",
     },
 ]
 
@@ -161,7 +163,8 @@ def _ensure_model_downloaded(model_id: str) -> str:
         raise EngineNotInstalledError("请安装 huggingface_hub: pip install huggingface_hub")
     cache_dir = _get_platform_hf_dir()
     os.makedirs(cache_dir, exist_ok=True)
-    snapshot_download(repo_id=hf_repo, cache_dir=cache_dir, local_files_ok=True)
+    # 仅传 repo_id / cache_dir，兼容新旧版 huggingface_hub（新版可能已移除 local_files_ok）
+    snapshot_download(repo_id=hf_repo, cache_dir=cache_dir)
     return hf_repo
 
 

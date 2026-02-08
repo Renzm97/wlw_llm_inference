@@ -11,12 +11,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import queue
+import re
+import subprocess
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
+
+import httpx
 
 # 推理与验证：从 inference_core 导入
 from inference_core import (
@@ -57,10 +63,63 @@ def _parse_gpu_memory_util(gpu_count: Optional[str]) -> Optional[float]:
         return None
 
 
+def _ensure_ollama_running_and_model(
+    base_url: str,
+    ollama_model_name: str,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> None:
+    """检查 Ollama 服务可达，若本地无该模型则拉取（ollama pull），并上报真实进度。"""
+    def _report(p: int, msg: str) -> None:
+        if progress_callback:
+            progress_callback(p, msg)
+
+    try:
+        with httpx.Client(timeout=10.0) as c:
+            r = c.get(f"{base_url.rstrip('/')}/api/tags")
+            if r.status_code != 200:
+                raise EngineNotRunningError(f"Ollama 服务未就绪: {base_url}")
+            models = [m.get("name", "") for m in r.json().get("models", [])]
+            if not any(
+                name == ollama_model_name or name.startswith(ollama_model_name + ":") or ollama_model_name in name
+                for name in models
+            ):
+                logger.info("Ollama 中未找到模型 %s，尝试拉取: ollama pull %s", ollama_model_name, ollama_model_name)
+                _report(5, "正在拉取 Ollama 模型…")
+                env = os.environ.copy()
+                if "localhost" not in base_url:
+                    host = base_url.replace("https://", "").replace("http://", "")
+                    env["OLLAMA_HOST"] = host
+                proc = subprocess.Popen(
+                    ["ollama", "pull", ollama_model_name],
+                    stderr=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    env=env,
+                    text=True,
+                )
+                # 解析 stderr 中的进度，如 "pulling manifest... 100%" 或 "pulling xyz... 45%"
+                prog = re.compile(r"(\d+)\s*%")
+                last_pct = 5
+                if proc.stderr:
+                    for line in iter(proc.stderr.readline, ""):
+                        mo = prog.search(line)
+                        if mo:
+                            pct = min(95, max(last_pct, int(mo.group(1))))
+                            last_pct = pct
+                            _report(pct, f"拉取中… {pct}%")
+                proc.wait(timeout=600)
+                if proc.returncode != 0:
+                    raise EngineNotRunningError(f"ollama pull 失败: 退出码 {proc.returncode}")
+            _report(95, "Ollama 模型就绪")
+    except httpx.RequestError as e:
+        raise EngineNotRunningError(f"无法连接 Ollama 服务 {base_url}: {e}")
+
+
 def _start_model_impl(
     model_id: str,
-    engine_type: Literal["vllm", "sglang"],
+    engine_type: Literal["ollama", "vllm", "sglang"],
     *,
+    api_base_url: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
     format: Optional[str] = None,
     size: Optional[str] = None,
     quantization: Optional[str] = None,
@@ -71,9 +130,13 @@ def _start_model_impl(
     **kwargs: Any,
 ) -> tuple[str, str]:
     """
-    从 HF 下载模型到配置文件中的路径，创建 LLMInferencer 并注册，分配唯一 UID（run_id）。
-    可选校验：启动后调用 inference_core.validate_model_usable 验证模型是否可用。
+    根据引擎类型启动模型，注册运行实例并返回 (run_id, 可访问地址)。
+    若提供 progress_callback(percent, message)，将上报真实进度供前端展示。
     """
+    def _report(p: int, msg: str) -> None:
+        if progress_callback:
+            progress_callback(p, msg)
+
     entry = next((m for m in BUILTIN_MODELS if m["id"] == model_id), None)
     if not entry:
         raise ModelNotFoundError(f"未知内置模型: {model_id}")
@@ -81,9 +144,62 @@ def _start_model_impl(
         raise InvalidParameterError(
             f"模型 {model_id} 不支持引擎 {engine_type}，支持: {entry.get('engines')}"
         )
-    # 下载到平台目录（配置文件 models_dir / models_subdir_hf）
-    resolved = _ensure_model_downloaded(model_id)
 
+    run_id = str(uuid.uuid4())
+    address: str
+
+    if engine_type == "ollama":
+        _report(0, "正在检查 Ollama 服务…")
+        ollama_cfg = CONFIG.get("ollama") or {}
+        base_url = (ollama_cfg.get("base_url") or "http://localhost:11434").rstrip("/")
+        ollama_model_name = entry.get("ollama_name") or model_id
+        with httpx.Client(timeout=10.0) as c:
+            r = c.get(f"{base_url.rstrip('/')}/api/tags")
+            if r.status_code != 200:
+                raise EngineNotRunningError(f"Ollama 服务未就绪: {base_url}")
+        address = base_url
+        with _running_lock:
+            RUNNING_INSTANCES[run_id] = {
+                "inferencer": None,
+                "model_id": model_id,
+                "engine_type": engine_type,
+                "model_name": ollama_model_name,
+                "created_at": time.time(),
+                "address": address,
+                "format": format,
+                "size": size,
+                "quantization": quantization,
+                "gpu_count": gpu_count,
+                "replicas": replicas,
+                "thought_mode": thought_mode,
+                "parse_inference": parse_inference,
+            }
+        try:
+            _ensure_ollama_running_and_model(base_url, ollama_model_name, progress_callback=progress_callback)
+            _report(98, "正在验证模型…")
+            inferencer = LLMInferencer(
+                engine_type="ollama",
+                model_name=ollama_model_name,
+                ollama_base_url=base_url,
+            )
+            if not validate_model_usable(inferencer, max_tokens=5):
+                logger.warning("Ollama 模型验证未通过，但已登记为运行实例 run_id=%s", run_id)
+            with _running_lock:
+                if run_id in RUNNING_INSTANCES:
+                    RUNNING_INSTANCES[run_id]["inferencer"] = inferencer
+        except Exception:
+            with _running_lock:
+                if run_id in RUNNING_INSTANCES:
+                    del RUNNING_INSTANCES[run_id]
+            raise
+        _report(100, "就绪")
+        logger.info("已启动 Ollama 模型 uid=%s model=%s address=%s", run_id, ollama_model_name, address)
+        return run_id, address
+
+    # vllm / sglang: 从 HF 下载并在进程内加载
+    _report(5, "正在下载模型…")
+    resolved = _ensure_model_downloaded(model_id)
+    _report(50, "下载完成，正在加载…")
     vllm_path: Optional[str] = None
     vllm_gpu_util: Optional[float] = None
     if engine_type == "vllm":
@@ -96,12 +212,13 @@ def _start_model_impl(
         vllm_local_model_path=vllm_path,
         vllm_gpu_memory_utilization=vllm_gpu_util,
     )
-    # 验证启动的模型是否可用（短文本生成）
+    _report(90, "正在验证模型…")
     if not validate_model_usable(inferencer, max_tokens=5):
-        logger.warning("模型验证未通过，但已登记为运行实例 run_id=%s", model_id)
+        logger.warning("模型验证未通过，但已登记为运行实例 run_id=%s", run_id)
+    _report(100, "就绪")
 
-    run_id = str(uuid.uuid4())  # 唯一 UID
-    address = f"local:{run_id}"
+    # 返回可访问地址：优先使用传入的本 API 服务地址，便于前端展示
+    address = (api_base_url or "").rstrip("/") if api_base_url else f"local:{run_id}"
     with _running_lock:
         RUNNING_INSTANCES[run_id] = {
             "inferencer": inferencer,
@@ -118,7 +235,7 @@ def _start_model_impl(
             "thought_mode": thought_mode,
             "parse_inference": parse_inference,
         }
-    logger.info("已启动模型 uid=%s model_id=%s engine=%s", run_id, model_id, engine_type)
+    logger.info("已启动模型 uid=%s model_id=%s engine=%s address=%s", run_id, model_id, engine_type, address)
     return run_id, address
 
 
@@ -132,21 +249,25 @@ def _stop_model_impl(run_id: str) -> bool:
 
 
 def _get_running_inferencer(run_id: str) -> Optional[LLMInferencer]:
-    """根据 run_id 获取已注册的 LLMInferencer，不存在返回 None。"""
+    """根据 run_id 获取已注册的 LLMInferencer，不存在返回 None；存在但 inferencer 未就绪则抛错。"""
     with _running_lock:
         entry = RUNNING_INSTANCES.get(run_id)
     if not entry:
         return None
-    return entry.get("inferencer")
+    inf = entry.get("inferencer")
+    if inf is None:
+        raise EngineNotRunningError("该模型正在启动中（如拉取/加载），请稍候再试")
+    return inf
 
 
 # ==================== FastAPI 接口层（与推理核心解耦） ====================
 
 # 仅在使用 FastAPI 时导入，避免无 FastAPI 环境报错
 try:
+    import asyncio
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse, FileResponse
+    from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
     FASTAPI_AVAILABLE = True
@@ -216,9 +337,9 @@ if FASTAPI_AVAILABLE:
         data: Optional[Union[SuccessData, Dict[str, Any]]] = None
 
     class StartModelRequest(BaseModel):
-        """启动模型请求体：配置引擎与参数后，从 HF 下载并启动，分配唯一 UID。"""
+        """启动模型请求体：配置引擎与参数后启动（ollama/vllm/sglang），分配唯一 UID，返回可访问地址。"""
         model_id: str = Field(..., min_length=1, description="内置模型 id，如 qwen2-0.5b、llama3.2")
-        engine_type: Literal["vllm", "sglang"] = Field(..., description="模型引擎（必选）")
+        engine_type: Literal["ollama", "vllm", "sglang"] = Field(..., description="模型引擎（必选）")
         format: Optional[str] = Field(default="pytorch", description="模型格式（必选，如 pytorch/safetensors）")
         size: Optional[str] = Field(default="0.5B", description="模型大小（必选，如 0.5B/1B）")
         quantization: Optional[str] = Field(default="none", description="量化（必选，如 none/int4/int8）")
@@ -307,12 +428,14 @@ if FASTAPI_AVAILABLE:
 
         @app.post("/api/v1/models/start", response_model=ApiResponse)
         async def api_start_model(body: StartModelRequest, request: Request):
-            """从 HF 下载模型到配置路径并启动，分配唯一 UID（run_id），返回 run_id 与运行地址。"""
+            """根据前端命令启动 ollama/vllm/sglang 对应模型，返回 run_id 与可访问地址供运行模型页展示。"""
             rid = request.state.request_id
+            api_base_url = str(request.base_url).rstrip("/")
             try:
                 run_id, address = _start_model_impl(
                     model_id=body.model_id,
                     engine_type=body.engine_type,
+                    api_base_url=api_base_url,
                     format=body.format,
                     size=body.size,
                     quantization=body.quantization,
@@ -332,6 +455,65 @@ if FASTAPI_AVAILABLE:
             except Exception as e:
                 logger.exception("启动模型异常: %s", e)
                 raise
+
+        @app.post("/api/v1/models/start-stream")
+        async def api_start_model_stream(body: StartModelRequest, request: Request):
+            """流式启动模型：返回 NDJSON 流，每行 { progress, message } 或最终 { progress: 100, run_id, address }。"""
+            api_base_url = str(request.base_url).rstrip("/")
+            progress_queue: queue.Queue = queue.Queue()
+            result_holder: List[Any] = []
+
+            def progress_callback(percent: int, message: str) -> None:
+                progress_queue.put({"progress": percent, "message": message})
+
+            def run_start() -> None:
+                try:
+                    run_id, address = _start_model_impl(
+                        model_id=body.model_id,
+                        engine_type=body.engine_type,
+                        api_base_url=api_base_url,
+                        progress_callback=progress_callback,
+                        format=body.format,
+                        size=body.size,
+                        quantization=body.quantization,
+                        gpu_count=body.gpu_count,
+                        replicas=body.replicas,
+                        thought_mode=body.thought_mode,
+                        parse_inference=body.parse_inference,
+                    )
+                    result_holder.append(("ok", run_id, address))
+                except Exception as e:
+                    logger.exception("启动模型流式异常: %s", e)
+                    result_holder.append(("err", str(e)))
+
+            thread = threading.Thread(target=run_start)
+            thread.start()
+
+            async def ndjson_stream():
+                while True:
+                    while not progress_queue.empty():
+                        try:
+                            item = progress_queue.get_nowait()
+                            yield json.dumps(item, ensure_ascii=False) + "\n"
+                        except queue.Empty:
+                            break
+                    if result_holder:
+                        status = result_holder[0]
+                        if status[0] == "ok":
+                            yield json.dumps(
+                                {"progress": 100, "run_id": status[1], "address": status[2]},
+                                ensure_ascii=False,
+                            ) + "\n"
+                        else:
+                            yield json.dumps({"progress": 0, "error": status[1]}, ensure_ascii=False) + "\n"
+                        return
+                    await asyncio.sleep(0.12)
+
+            return StreamingResponse(
+                ndjson_stream(),
+                media_type="application/x-ndjson",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         @app.get("/api/v1/models/running", response_model=ApiResponse)
         async def api_list_running(request: Request):

@@ -98,8 +98,15 @@ body {
   display: block;
 }
 
+.page-title-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
 .page-title {
-  margin: 0 0 24px;
+  margin: 0;
   font-size: 22px;
   font-weight: 600;
   color: var(--text);
@@ -218,6 +225,10 @@ body {
 
 .config-drawer.open {
   transform: translateX(0);
+}
+
+.config-form {
+  position: relative;
 }
 
 .config-form-title {
@@ -339,12 +350,50 @@ input:checked + .slider::before {
   margin-bottom: 0;
 }
 
-.form-actions {
-  display: flex;
-  gap: 12px;
+/* 启动进度条：在启动按钮上方，灰色细线，略短于配置区宽度，始终在表单内可见 */
+.launch-progress-wrap {
+  display: block;
   margin-top: 24px;
   padding-top: 20px;
   border-top: 1px solid var(--border);
+  margin-bottom: 16px;
+  min-height: 36px;
+}
+
+.launch-progress-wrap.hidden {
+  display: none !important;
+}
+
+.launch-progress-label {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.launch-progress-track {
+  height: 4px;
+  width: 92%;
+  max-width: 340px;
+  margin: 0 auto;
+  background: var(--gray-300);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.launch-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: #93c5fd;
+  border-radius: 2px;
+  transition: width 0.35s ease-out;
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 
 .btn {
@@ -427,14 +476,23 @@ input:checked + .slider::before {
   background: var(--bg-secondary);
 }
 
+.table-wrap-empty .data-table {
+  display: none;
+}
+
+.table-wrap-empty .table-empty {
+  display: block;
+}
+
 .table-empty {
-  padding: 48px;
+  padding: 48px 24px;
   text-align: center;
   color: var(--text-muted);
+  font-size: 14px;
 }
 
 .table-empty.hidden {
-  display: none;
+  display: none !important;
 }
 
 .hidden {

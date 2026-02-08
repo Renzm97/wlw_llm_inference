@@ -21,9 +21,11 @@
     running: [],
     nextRunningId: 1,
     modelsLoaded: false,
-    inferenceRecord: null, // 当前推理抽屉对应的运行记录
-    chatMessages: [],      // 多轮对话消息列表
+    inferenceRecord: null,
+    chatMessages: [],
   };
+
+  var loadRunningAbortController = null;
 
   const $ = (sel, el = document) => el.querySelector(sel);
   const $$ = (sel, el = document) => el.querySelectorAll(sel);
@@ -130,8 +132,31 @@
     };
   }
 
-  function isBackendStartedEngine(engine) {
-    return engine === 'vllm' || engine === 'sglang';
+  function setLaunchProgressPercent(pct) {
+    const fill = $('#launch-progress-fill');
+    if (fill) fill.style.width = Math.min(100, Math.max(0, pct)) + '%';
+  }
+
+  function showLaunchProgress(show) {
+    const wrap = $('#launch-progress-wrap');
+    const fill = $('#launch-progress-fill');
+    if (!wrap || !fill) return;
+    if (show) {
+      fill.style.width = '0%';
+      wrap.classList.remove('hidden');
+      wrap.setAttribute('aria-hidden', 'false');
+    } else {
+      wrap.classList.add('hidden');
+      wrap.setAttribute('aria-hidden', 'true');
+      fill.style.width = '0%';
+    }
+  }
+
+  function finishLaunchProgress() {
+    setLaunchProgressPercent(100);
+    setTimeout(function () {
+      showLaunchProgress(false);
+    }, 350);
   }
 
   function onLaunch(e) {
@@ -144,78 +169,78 @@
     const btn = $('#btn-launch');
     if (btn.disabled) return;
 
-    if (isBackendStartedEngine(cfg.engine)) {
-      btn.disabled = true;
-      btn.textContent = ' 启动中... ';
-      fetch(API_BASE + '/api/v1/models/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model_id: modelId,
-          engine_type: cfg.engine,
-          format: cfg.format,
-          size: cfg.size,
-          quantization: cfg.quantization,
-          gpu_count: cfg.gpu_count,
-          replicas: cfg.replicas,
-          thought_mode: cfg.thought_mode,
-          parse_inference: cfg.parse_inference,
-        }),
-      })
-        .then(function (res) {
-          return res.json().then(function (data) {
-            if (!res.ok) {
-              throw new Error(data.msg || data.detail || '启动失败');
-            }
-            if (data.code !== 200 || !data.data) {
-              throw new Error(data.msg || '启动失败');
-            }
-            const runId = data.data.run_id || data.data.uid;
-            const address = data.data.address || 'local:' + runId;
-            const record = {
-              id: runId,
-              run_id: runId,
-              name: modelName,
-              modelId,
-              address,
-              gpuIndex: cfg.gpu_count === 'auto' ? 'auto' : cfg.gpu_count,
-              quantization: cfg.quantization,
-              size: cfg.size,
-              replicas: cfg.replicas,
-              engine: cfg.engine,
-            };
-            state.running.push(record);
-            renderRunningTable();
-            closeConfigPanel();
-            return data;
-          });
-        })
-        .catch(function (err) {
-          alert('启动失败: ' + (err.message || String(err)));
-        })
-        .finally(function () {
-          btn.disabled = false;
-          btn.innerHTML = '<span class="icon">🚀</span> 启动';
-        });
-      return;
+    btn.disabled = true;
+    showLaunchProgress(true);
+    setLaunchProgressPercent(0);
+    if (loadRunningAbortController) {
+      loadRunningAbortController.abort();
+      loadRunningAbortController = null;
     }
 
-    // Ollama：仅本地展示，不调用后端启动
-    const address = cfg.engine === 'ollama' ? 'http://localhost:11434' : 'http://localhost:8000';
-    const record = {
-      id: 'local-' + String(state.nextRunningId++),
-      name: modelName,
-      modelId,
-      address,
-      gpuIndex: cfg.gpu_count === 'auto' ? 'auto' : cfg.gpu_count,
-      quantization: cfg.quantization,
+    const payload = {
+      model_id: modelId,
+      engine_type: cfg.engine,
+      format: cfg.format,
       size: cfg.size,
+      quantization: cfg.quantization,
+      gpu_count: cfg.gpu_count,
       replicas: cfg.replicas,
-      engine: cfg.engine,
+      thought_mode: cfg.thought_mode,
+      parse_inference: cfg.parse_inference,
     };
-    state.running.push(record);
-    renderRunningTable();
-    closeConfigPanel();
+
+    var progressTick = setInterval(function () {
+      var fill = $('#launch-progress-fill');
+      if (!fill) return;
+      var w = parseFloat(fill.style.width) || 0;
+      if (w < 90) setLaunchProgressPercent(w + 8);
+    }, 800);
+
+    fetch(API_BASE + '/api/v1/models/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then(function (res) {
+        return res.json().then(function (data) {
+          if (!res.ok) {
+            throw new Error(data.msg || data.detail || '启动失败');
+          }
+          if (data.code !== 200 || !data.data) {
+            throw new Error(data.msg || '启动失败');
+          }
+          var runId = data.data.run_id || data.data.uid;
+          var address = data.data.address || 'local:' + runId;
+          var record = {
+            id: runId,
+            run_id: runId,
+            name: modelName,
+            modelId: modelId,
+            address: address,
+            gpuIndex: cfg.gpu_count === 'auto' ? 'auto' : cfg.gpu_count,
+            quantization: cfg.quantization,
+            size: cfg.size,
+            replicas: cfg.replicas,
+            engine: cfg.engine,
+            addedAt: Date.now(),
+          };
+          state.running.push(record);
+          closeConfigPanel();
+          setTab('llm');
+          setPage('running');
+          renderRunningTable();
+          return data;
+        });
+      })
+      .catch(function (err) {
+        alert('启动失败: ' + (err.message || String(err)));
+      })
+      .finally(function () {
+        clearInterval(progressTick);
+        finishLaunchProgress();
+        btn.disabled = false;
+        btn.innerHTML = '<span class="icon">🚀</span> 启动';
+      });
   }
 
   function stopRunning(id) {
@@ -252,13 +277,19 @@
   function renderRunningTable() {
     const tbody = $('#running-tbody');
     const empty = $('#running-empty');
-    const list = state.running.filter((r) => (state.tab === 'llm' ? BUILTIN_LLM.some((m) => m.id === r.modelId) : BUILTIN_EMBED.some((m) => m.id === r.modelId)));
+    const wrap = $('.table-wrap');
+    // LLM 页：显示所有 ollama/vllm/sglang 引擎的运行实例
+    const list = state.tab === 'llm'
+      ? state.running.filter((r) => ['ollama', 'vllm', 'sglang'].includes(r.engine))
+      : state.running.filter((r) => BUILTIN_EMBED.some((m) => m.id === r.modelId));
     if (list.length === 0) {
       tbody.innerHTML = '';
-      empty.classList.remove('hidden');
+      if (empty) empty.classList.remove('hidden');
+      if (wrap) wrap.classList.add('table-wrap-empty');
       return;
     }
-    empty.classList.add('hidden');
+    if (empty) empty.classList.add('hidden');
+    if (wrap) wrap.classList.remove('table-wrap-empty');
     tbody.innerHTML = list
       .map(
         (r) =>
@@ -463,43 +494,54 @@
       });
   }
 
+  function mapBackendToRecord(r) {
+    return {
+      id: r.run_id,
+      run_id: r.run_id,
+      name: r.model_name || r.model_id,
+      modelId: r.model_id,
+      address: r.address,
+      gpuIndex: 'auto',
+      quantization: 'none',
+      size: '-',
+      replicas: 1,
+      engine: r.engine_type,
+    };
+  }
+
   function loadRunningFromBackend() {
-    fetch(API_BASE + '/api/v1/models/running')
+    if (loadRunningAbortController) loadRunningAbortController.abort();
+    loadRunningAbortController = new AbortController();
+    var signal = loadRunningAbortController.signal;
+
+    fetch(API_BASE + '/api/v1/models/running', { signal: signal })
       .then(function (res) {
         return res.json();
       })
       .then(function (data) {
-        if (data.code === 200 && data.data && Array.isArray(data.data.running)) {
-          state.running = data.data.running.map(function (r) {
-            return {
-              id: r.run_id,
-              run_id: r.run_id,
-              name: r.model_name || r.model_id,
-              modelId: r.model_id,
-              address: r.address,
-              gpuIndex: 'auto',
-              quantization: 'none',
-              size: '-',
-              replicas: 1,
-              engine: r.engine_type,
-            };
-          });
-          renderRunningTable();
-        }
+        if (data.code !== 200 || !data.data || !Array.isArray(data.data.running)) return;
+        state.running = data.data.running.map(mapBackendToRecord);
+        renderRunningTable();
       })
-      .catch(function () {});
+      .catch(function (err) {
+        if (err && err.name === 'AbortError') return;
+      })
+      .finally(function () {
+        if (loadRunningAbortController && loadRunningAbortController.signal.aborted) return;
+        loadRunningAbortController = null;
+      });
   }
 
   function init() {
     renderModelCards();
     renderRunningTable();
     loadModelsFromBackend();
+    loadRunningFromBackend();
 
     $$('.nav-item').forEach((a) => {
       a.addEventListener('click', (e) => {
         e.preventDefault();
         setPage(a.dataset.page);
-        if (a.dataset.page === 'running') loadRunningFromBackend();
       });
     });
 
@@ -507,6 +549,9 @@
       t.addEventListener('click', () => setTab(t.dataset.tab));
     });
 
+    $('#btn-refresh-running')?.addEventListener('click', function () {
+      loadRunningFromBackend();
+    });
     $('#config-form')?.addEventListener('submit', onLaunch);
     $('#btn-cancel')?.addEventListener('click', closeConfigPanel);
     $('#config-drawer-backdrop')?.addEventListener('click', closeConfigPanel);

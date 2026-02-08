@@ -37,7 +37,10 @@
 
       <!-- 运行模型页 -->
       <section id="page-running" class="page">
-        <h1 class="page-title">运行模型</h1>
+        <div class="page-title-row">
+          <h1 class="page-title">运行模型</h1>
+          <button type="button" class="btn btn-sm btn-secondary" id="btn-refresh-running" title="从服务器刷新列表">刷新</button>
+        </div>
         <div class="tabs">
           <button type="button" class="tab active" data-tab="llm">语言模型</button>
           <button type="button" class="tab" data-tab="embed">嵌入模型</button>
@@ -130,6 +133,13 @@
           <input type="text" name="extra" placeholder="key=value" />
         </div>
       </details>
+      <!-- 启动进度条：在按钮上方，灰色细线，淡蓝色填充，显示真实后端进度 -->
+      <div class="launch-progress-wrap hidden" id="launch-progress-wrap" aria-hidden="true">
+        <p class="launch-progress-label">启动中</p>
+        <div class="launch-progress-track">
+          <div class="launch-progress-fill" id="launch-progress-fill"></div>
+        </div>
+      </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" id="btn-launch">
           <span class="icon">🚀</span> 启动
