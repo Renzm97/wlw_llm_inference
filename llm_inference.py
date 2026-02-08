@@ -1,75 +1,38 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-轻量 LLM 推理核心模块 + FastAPI 接口层
-对标 Xinference 基础推理能力，统一集成 Ollama / VLLM / SGLang 三大后端。
+启动模型 API 服务：专注实现「启动模型」接口与运行实例管理。
+推理能力与「验证启动的模型是否可用」由 inference_core 提供；模型从 HF 下载并存到配置文件中的路径，每个实例分配唯一 UID（run_id）。
 
-========== 快速开始指南 ==========
-1. 依赖安装（必装）:
-   pip install pydantic fastapi uvicorn requests httpx
-
-2. 各引擎可选依赖:
-   - Ollama: pip install ollama 或使用内置 httpx 调用本地 API
-   - VLLM:   pip install vllm   (需 GPU/CUDA)
-   - SGLang: pip install sglang (需 GPU/CUDA)
-
-3. 环境准备:
-   - Ollama: 先安装并启动 Ollama 服务，拉取模型如 llama3.2
-   - VLLM:   本地需启动 vllm serve，或配置 base_url 远程调用
-   - SGLang: 本地需启动 sglang 服务
-
-4. 运行方式:
-   - 仅运行测试: python llm_inference.py
-   - 启动 API 服务: python llm_inference.py --serve [--host 0.0.0.0] [--port 8000]
-
-5. 使用示例见文件末尾「使用示例」注释块与测试用例。
+运行方式:
+  - 仅运行测试: python llm_inference.py
+  - 启动 API 服务: python llm_inference.py --serve [--host 0.0.0.0] [--port 8000]
 """
-
-# ---------- 依赖声明（与 requirements.txt 对应） ----------
-# 必装: pydantic, fastapi, uvicorn, requests, httpx
-# 可选: ollama (Ollama), vllm (VLLM), sglang (SGLang)
 
 from __future__ import annotations
 
-import abc
-import json
 import logging
+import os
+import threading
 import time
 import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 
-# 必装依赖直接导入
-import httpx
+# 推理与验证：从 inference_core 导入
+from inference_core import (
+    BUILTIN_MODELS,
+    CONFIG,
+    LLMInferencer,
+    EngineNotInstalledError,
+    EngineNotRunningError,
+    InvalidParameterError,
+    LLMInferenceError,
+    ModelNotFoundError,
+    StructuredOutputNotSupportedError,
+    _ensure_model_downloaded,
+    validate_model_usable,
+)
 
-# 软导入：未安装的引擎仅在使用时抛异常
-try:
-    import ollama
-    OLLAMA_AVAILABLE = True
-except ImportError:
-    ollama = None
-    OLLAMA_AVAILABLE = False
-
-try:
-    import vllm
-    from vllm import LLM, SamplingParams
-    VLLM_AVAILABLE = True
-except ImportError:
-    vllm = None
-    LLM = None
-    SamplingParams = None
-    VLLM_AVAILABLE = False
-
-try:
-    import sglang
-    from sglang import Engine
-    SGLANG_AVAILABLE = True
-except ImportError:
-    sglang = None
-    Engine = None
-    SGLANG_AVAILABLE = False
-
-
-# ---------- 日志配置 ----------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -77,620 +40,104 @@ logging.basicConfig(
 )
 logger = logging.getLogger("llm_inference")
 
-
-# ---------- 自定义异常 ----------
-class LLMInferenceError(Exception):
-    """推理模块基础异常。"""
-
-
-class EngineNotInstalledError(LLMInferenceError):
-    """引擎对应依赖未安装。"""
+# ==================== 运行实例管理（供 FastAPI 使用） ====================
+# 全局注册表：run_id -> { "inferencer", "model_id", "engine_type", "model_name", "created_at", "address" }
+RUNNING_INSTANCES: Dict[str, Dict[str, Any]] = {}
+_running_lock = threading.Lock()
 
 
-class EngineNotRunningError(LLMInferenceError):
-    """引擎服务未启动（如 Ollama/VLLM/SGLang 未运行）。"""
+def _parse_gpu_memory_util(gpu_count: Optional[str]) -> Optional[float]:
+    """将前端 GPU 数量（auto 或数字）转为 vllm gpu_memory_utilization。"""
+    if not gpu_count or str(gpu_count).strip().lower() == "auto":
+        return None
+    try:
+        v = float(str(gpu_count).strip())
+        return max(0.1, min(1.0, v)) if v <= 1 else None  # 若 >1 视为 GPU 卡数，暂不映射
+    except ValueError:
+        return None
 
 
-class ModelNotFoundError(LLMInferenceError):
-    """指定模型不存在或不可用。"""
-
-
-class InvalidParameterError(LLMInferenceError):
-    """参数不合法（如 temperature 超出范围）。"""
-
-
-class StructuredOutputNotSupportedError(LLMInferenceError):
-    """当前引擎不支持结构化输出（仅 SGLang 支持）。"""
-
-
-# ---------- 引擎适配基类 ----------
-class BaseLLMAdapter(abc.ABC):
-    """LLM 引擎适配基类，定义 generate / chat / structured_generate 统一抽象接口。"""
-
-    @property
-    @abc.abstractmethod
-    def engine_type(self) -> str:
-        """返回引擎类型标识，如 ollama / vllm / sglang。"""
-        pass
-
-    @abc.abstractmethod
-    def is_available(self) -> bool:
-        """检查引擎依赖是否可用。"""
-        pass
-
-    @abc.abstractmethod
-    def check_service(self, model_name: str) -> None:
-        """检查服务/模型是否可用，不可用时抛出相应异常。"""
-        pass
-
-    @abc.abstractmethod
-    def generate(
-        self,
-        prompt: str,
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        """单轮推理：给定 prompt，返回模型生成文本。"""
-        pass
-
-    @abc.abstractmethod
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        """多轮对话：OpenAI 风格 messages，返回助手回复。"""
-        pass
-
-    def structured_generate(
-        self,
-        prompt: str,
-        schema: Optional[Dict[str, Any]] = None,
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> Union[Dict[str, Any], str]:
-        """结构化输出（默认返回原始文本，SGLang 可重写为 JSON）。"""
-        return self.generate(
-            prompt,
-            model_name=model_name,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            **kwargs,
+def _start_model_impl(
+    model_id: str,
+    engine_type: Literal["vllm", "sglang"],
+    *,
+    format: Optional[str] = None,
+    size: Optional[str] = None,
+    quantization: Optional[str] = None,
+    gpu_count: Optional[str] = None,
+    replicas: int = 1,
+    thought_mode: bool = False,
+    parse_inference: bool = False,
+    **kwargs: Any,
+) -> tuple[str, str]:
+    """
+    从 HF 下载模型到配置文件中的路径，创建 LLMInferencer 并注册，分配唯一 UID（run_id）。
+    可选校验：启动后调用 inference_core.validate_model_usable 验证模型是否可用。
+    """
+    entry = next((m for m in BUILTIN_MODELS if m["id"] == model_id), None)
+    if not entry:
+        raise ModelNotFoundError(f"未知内置模型: {model_id}")
+    if engine_type not in (entry.get("engines") or []):
+        raise InvalidParameterError(
+            f"模型 {model_id} 不支持引擎 {engine_type}，支持: {entry.get('engines')}"
         )
+    # 下载到平台目录（配置文件 models_dir / models_subdir_hf）
+    resolved = _ensure_model_downloaded(model_id)
 
+    vllm_path: Optional[str] = None
+    vllm_gpu_util: Optional[float] = None
+    if engine_type == "vllm":
+        vllm_path = resolved
+        vllm_gpu_util = _parse_gpu_memory_util(gpu_count)
 
-# ---------- Ollama 适配器 ----------
-class OllamaAdapter(BaseLLMAdapter):
-    """Ollama 引擎适配：基于 ollama 库或 httpx 调用本地 API，兼容多轮对话。"""
+    inferencer = LLMInferencer(
+        engine_type=engine_type,
+        model_name=model_id,
+        vllm_local_model_path=vllm_path,
+        vllm_gpu_memory_utilization=vllm_gpu_util,
+    )
+    # 验证启动的模型是否可用（短文本生成）
+    if not validate_model_usable(inferencer, max_tokens=5):
+        logger.warning("模型验证未通过，但已登记为运行实例 run_id=%s", model_id)
 
-    def __init__(self, base_url: str = "http://localhost:11434"):
-        self.base_url = base_url.rstrip("/")
-
-    @property
-    def engine_type(self) -> str:
-        return "ollama"
-
-    def is_available(self) -> bool:
-        if OLLAMA_AVAILABLE:
-            return True
-        try:
-            with httpx.Client(timeout=2.0) as c:
-                r = c.get(f"{self.base_url}/api/tags")
-                return r.status_code == 200
-        except Exception:
-            return False
-
-    def check_service(self, model_name: str) -> None:
-        if not OLLAMA_AVAILABLE:
-            try:
-                with httpx.Client(timeout=5.0) as c:
-                    r = c.get(f"{self.base_url}/api/tags")
-                    if r.status_code != 200:
-                        raise EngineNotRunningError(
-                            f"Ollama 服务未就绪: {self.base_url}，请先启动 Ollama。"
-                        )
-                    data = r.json()
-                    names = [m.get("name") for m in data.get("models", [])]
-                    if model_name not in names and not any(
-                        m.startswith(model_name) or model_name in m for m in names
-                    ):
-                        raise ModelNotFoundError(
-                            f"模型 '{model_name}' 不在 Ollama 已拉取列表中。可用: {names}。"
-                        )
-            except httpx.RequestError as e:
-                raise EngineNotRunningError(
-                    f"无法连接 Ollama 服务 {self.base_url}，请确认已启动。错误: {e}"
-                )
-            return
-        # 使用 ollama 库
-        try:
-            ollama.list()
-        except Exception as e:
-            raise EngineNotRunningError(f"Ollama 服务未就绪: {e}")
-        models = [(m.get("model") or m.get("name") or "") for m in ollama.list().get("models", [])]
-        if model_name not in models and not any(
-            m.startswith(model_name) or model_name in m for m in models
-        ):
-            raise ModelNotFoundError(f"模型 '{model_name}' 不存在。可用: {models}。")
-
-    def generate(
-        self,
-        prompt: str,
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        self.check_service(model_name)
-        if OLLAMA_AVAILABLE:
-            opts = {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                "top_p": top_p,
-                **{k: v for k, v in kwargs.items() if v is not None},
-            }
-            resp = ollama.generate(model=model_name, prompt=prompt, options=opts)
-            return resp.get("response", "").strip()
-        # httpx 回退
-        payload = {
-            "model": model_name,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                "top_p": top_p,
-            },
+    run_id = str(uuid.uuid4())  # 唯一 UID
+    address = f"local:{run_id}"
+    with _running_lock:
+        RUNNING_INSTANCES[run_id] = {
+            "inferencer": inferencer,
+            "model_id": model_id,
+            "engine_type": engine_type,
+            "model_name": model_id,
+            "created_at": time.time(),
+            "address": address,
+            "format": format,
+            "size": size,
+            "quantization": quantization,
+            "gpu_count": gpu_count,
+            "replicas": replicas,
+            "thought_mode": thought_mode,
+            "parse_inference": parse_inference,
         }
-        with httpx.Client(timeout=60.0) as c:
-            r = c.post(f"{self.base_url}/api/generate", json=payload)
-            r.raise_for_status()
-            return r.json().get("response", "").strip()
-
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        self.check_service(model_name)
-        if OLLAMA_AVAILABLE:
-            opts = {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                "top_p": top_p,
-                **{k: v for k, v in kwargs.items() if v is not None},
-            }
-            resp = ollama.chat(
-                model=model_name,
-                messages=[{"role": m["role"], "content": m["content"]} for m in messages],
-                options=opts,
-            )
-            return resp.get("message", {}).get("content", "").strip()
-        payload = {
-            "model": model_name,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                "top_p": top_p,
-            },
-        }
-        with httpx.Client(timeout=60.0) as c:
-            r = c.post(f"{self.base_url}/api/chat", json=payload)
-            r.raise_for_status()
-            return r.json().get("message", {}).get("content", "").strip()
+    logger.info("已启动模型 uid=%s model_id=%s engine=%s", run_id, model_id, engine_type)
+    return run_id, address
 
 
-# ---------- VLLM 适配器 ----------
-class VLLMAdapter(BaseLLMAdapter):
-    """VLLM 引擎适配：支持本地 LLM 实例或远程 OpenAI 兼容 API。"""
-
-    def __init__(
-        self,
-        base_url: Optional[str] = None,
-        local_model_path: Optional[str] = None,
-    ):
-        """
-        base_url: 远程 API 地址（如 http://localhost:8000/v1），与 OpenAI 兼容。
-        local_model_path: 本地模型路径，用于本地 LLM 实例；与 base_url 二选一。
-        """
-        self.base_url = base_url
-        self.local_model_path = local_model_path
-        self._llm: Any = None
-
-    @property
-    def engine_type(self) -> str:
-        return "vllm"
-
-    def is_available(self) -> bool:
-        return VLLM_AVAILABLE
-
-    def _get_llm(self, model_name: str) -> Any:
-        if not VLLM_AVAILABLE:
-            raise EngineNotInstalledError(
-                "未安装 vllm。请执行: pip install vllm（需 GPU 环境）。"
-            )
-        if self.base_url:
-            return None
-        path = self.local_model_path or model_name
-        if self._llm is None:
-            self._llm = LLM(model=path, trust_remote_code=True)
-        return self._llm
-
-    def check_service(self, model_name: str) -> None:
-        if not VLLM_AVAILABLE:
-            raise EngineNotInstalledError(
-                "未安装 vllm。请执行: pip install vllm（需 GPU 环境）。"
-            )
-        if self.base_url:
-            try:
-                with httpx.Client(timeout=5.0) as c:
-                    r = c.get(f"{self.base_url.replace('/v1', '')}/health")
-                    if r.status_code != 200:
-                        raise EngineNotRunningError(
-                            f"VLLM 服务未就绪: {self.base_url}。"
-                        )
-            except httpx.RequestError as e:
-                raise EngineNotRunningError(
-                    f"无法连接 VLLM 服务 {self.base_url}。错误: {e}"
-                )
-        else:
-            self._get_llm(model_name)
-
-    def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
-        """将 OpenAI messages 转为单条 prompt 文本（简单拼接）。"""
-        parts = []
-        for m in messages:
-            role = m.get("role", "user")
-            content = m.get("content", "")
-            if role == "system":
-                parts.append(f"System: {content}")
-            elif role == "user":
-                parts.append(f"User: {content}")
-            elif role == "assistant":
-                parts.append(f"Assistant: {content}")
-        parts.append("Assistant: ")
-        return "\n".join(parts)
-
-    def generate(
-        self,
-        prompt: str,
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        self.check_service(model_name)
-        sampling = SamplingParams(
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-        )
-        if self.base_url:
-            # 远程 OpenAI 兼容
-            with httpx.Client(timeout=120.0) as c:
-                r = c.post(
-                    f"{self.base_url}/completions",
-                    json={
-                        "model": model_name,
-                        "prompt": prompt,
-                        "max_tokens": max_tokens,
-                        "temperature": temperature,
-                        "top_p": top_p,
-                    },
-                )
-                r.raise_for_status()
-                choices = r.json().get("choices", [])
-                return (choices[0].get("text", "") if choices else "").strip()
-        llm = self._get_llm(model_name)
-        outs = llm.generate([prompt], sampling)
-        return (outs[0].outputs[0].text if outs and outs[0].outputs else "").strip()
-
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        prompt = self._messages_to_prompt(messages)
-        return self.generate(
-            prompt,
-            model_name=model_name,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            **kwargs,
-        )
+def _stop_model_impl(run_id: str) -> bool:
+    """从注册表移除运行实例，返回是否曾存在。"""
+    with _running_lock:
+        existed = run_id in RUNNING_INSTANCES
+        if existed:
+            del RUNNING_INSTANCES[run_id]
+        return existed
 
 
-# ---------- SGLang 适配器 ----------
-class SGLangAdapter(BaseLLMAdapter):
-    """SGLang 引擎适配：本地启动，支持 structured_generate 实现 JSON 结构化输出。"""
-
-    def __init__(self, base_url: str = "http://localhost:30000"):
-        self.base_url = base_url.rstrip("/")
-        self._engine: Any = None
-
-    @property
-    def engine_type(self) -> str:
-        return "sglang"
-
-    def is_available(self) -> bool:
-        return SGLANG_AVAILABLE
-
-    def check_service(self, model_name: str) -> None:
-        if not SGLANG_AVAILABLE:
-            raise EngineNotInstalledError(
-                "未安装 sglang。请执行: pip install sglang（需 GPU 环境）。"
-            )
-        try:
-            with httpx.Client(timeout=5.0) as c:
-                r = c.get(f"{self.base_url}/get_model_info")
-                if r.status_code != 200:
-                    raise EngineNotRunningError(
-                        f"SGLang 服务未就绪: {self.base_url}。"
-                    )
-        except httpx.RequestError as e:
-            raise EngineNotRunningError(
-                f"无法连接 SGLang 服务 {self.base_url}。错误: {e}"
-            )
-
-    def generate(
-        self,
-        prompt: str,
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        self.check_service(model_name)
-        # SGLang 常用 HTTP API：/generate 或兼容接口
-        payload = {
-            "text": prompt,
-            "sampling_params": {
-                "temperature": temperature,
-                "max_new_tokens": max_tokens,
-                "top_p": top_p,
-            },
-        }
-        with httpx.Client(timeout=120.0) as c:
-            r = c.post(f"{self.base_url}/generate", json=payload)
-            r.raise_for_status()
-            data = r.json()
-            return (data.get("text", "") or data.get("generated_text", "") or "").strip()
-
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        prompt = self._messages_to_prompt(messages)
-        return self.generate(
-            prompt,
-            model_name=model_name,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            **kwargs,
-        )
-
-    def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
-        parts = []
-        for m in messages:
-            role = m.get("role", "user")
-            content = m.get("content", "")
-            parts.append(f"{role}: {content}")
-        parts.append("assistant: ")
-        return "\n".join(parts)
-
-    def structured_generate(
-        self,
-        prompt: str,
-        schema: Optional[Dict[str, Any]] = None,
-        *,
-        model_name: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> Union[Dict[str, Any], str]:
-        """SGLang 结构化输出：要求模型返回 JSON，解析后返回字典。"""
-        self.check_service(model_name)
-        # 在 prompt 中要求输出 JSON，便于解析
-        schema_hint = ""
-        if schema:
-            schema_hint = f"\n请严格按以下 JSON 结构返回：\n{json.dumps(schema, ensure_ascii=False)}\n"
-        full_prompt = f"{prompt}{schema_hint}\n请只输出合法 JSON，不要其他文字。"
-        raw = self.generate(
-            full_prompt,
-            model_name=model_name,
-            temperature=max(0.1, temperature),
-            max_tokens=max_tokens,
-            top_p=top_p,
-            **kwargs,
-        )
-        try:
-            # 尝试从回复中截取 JSON 块
-            raw = raw.strip()
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                raw = raw[start:end]
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return {"raw": raw}
-
-
-# ---------- 核心推理类（对外唯一入口） ----------
-class LLMInferencer:
-    """主推理类：根据 engine_type 自动切换引擎，统一参数校验与引擎状态检测。"""
-
-    ENGINE_MAP = {
-        "ollama": OllamaAdapter,
-        "vllm": VLLMAdapter,
-        "sglang": SGLangAdapter,
-    }
-
-    def __init__(
-        self,
-        engine_type: Literal["ollama", "vllm", "sglang"],
-        model_name: str = "llama3.2",
-        *,
-        ollama_base_url: str = "http://localhost:11434",
-        vllm_base_url: Optional[str] = None,
-        vllm_local_model_path: Optional[str] = None,
-        sglang_base_url: str = "http://localhost:30000",
-    ):
-        """
-        初始化推理引擎。
-        engine_type: 引擎类型，ollama / vllm / sglang。
-        model_name: 默认模型名，如 Llama3-8B、Qwen-7B、llama3.2。
-        """
-        if engine_type not in self.ENGINE_MAP:
-            raise InvalidParameterError(
-                f"engine_type 仅允许 ollama / vllm / sglang，当前: {engine_type}"
-            )
-        self.engine_type = engine_type
-        self.model_name = model_name
-        adapter_cls = self.ENGINE_MAP[engine_type]
-        if engine_type == "ollama":
-            self._adapter: BaseLLMAdapter = adapter_cls(base_url=ollama_base_url)
-        elif engine_type == "vllm":
-            self._adapter = adapter_cls(
-                base_url=vllm_base_url,
-                local_model_path=vllm_local_model_path,
-            )
-        else:
-            self._adapter = adapter_cls(base_url=sglang_base_url)
-        if not self._adapter.is_available():
-            raise EngineNotInstalledError(
-                f"引擎 '{engine_type}' 依赖未安装，请安装对应可选依赖。"
-            )
-        self._adapter.check_service(model_name)
-        logger.info("LLMInferencer 初始化成功: engine=%s, model=%s", engine_type, model_name)
-
-    def _validate_common(
-        self,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-    ) -> None:
-        if not (0 <= temperature <= 2):
-            raise InvalidParameterError("temperature 需在 [0, 2] 范围内")
-        if max_tokens < 1:
-            raise InvalidParameterError("max_tokens 需为正整数")
-        if not (0 <= top_p <= 1):
-            raise InvalidParameterError("top_p 需在 [0, 1] 范围内")
-
-    def generate(
-        self,
-        prompt: str,
-        *,
-        model_name: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        """单轮推理。"""
-        self._validate_common(temperature=temperature, max_tokens=max_tokens, top_p=top_p)
-        model = model_name or self.model_name
-        self._adapter.check_service(model)
-        return self._adapter.generate(
-            prompt,
-            model_name=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            **kwargs,
-        )
-
-    def chat(
-        self,
-        messages: List[Dict[str, str]],
-        *,
-        model_name: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> str:
-        """多轮对话，OpenAI messages 格式。"""
-        self._validate_common(temperature=temperature, max_tokens=max_tokens, top_p=top_p)
-        model = model_name or self.model_name
-        self._adapter.check_service(model)
-        return self._adapter.chat(
-            messages,
-            model_name=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            **kwargs,
-        )
-
-    def structured_generate(
-        self,
-        prompt: str,
-        schema: Optional[Dict[str, Any]] = None,
-        *,
-        model_name: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        top_p: float = 0.95,
-        **kwargs: Any,
-    ) -> Union[Dict[str, Any], str]:
-        """结构化输出，仅 SGLang 实现 JSON 解析，其他引擎返回普通文本。"""
-        if self.engine_type != "sglang":
-            raise StructuredOutputNotSupportedError(
-                "structured_generate 仅支持 SGLang 引擎。"
-            )
-        self._validate_common(temperature=temperature, max_tokens=max_tokens, top_p=top_p)
-        model = model_name or self.model_name
-        self._adapter.check_service(model)
-        return self._adapter.structured_generate(
-            prompt,
-            schema,
-            model_name=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            **kwargs,
-        )
+def _get_running_inferencer(run_id: str) -> Optional[LLMInferencer]:
+    """根据 run_id 获取已注册的 LLMInferencer，不存在返回 None。"""
+    with _running_lock:
+        entry = RUNNING_INSTANCES.get(run_id)
+    if not entry:
+        return None
+    return entry.get("inferencer")
 
 
 # ==================== FastAPI 接口层（与推理核心解耦） ====================
@@ -699,13 +146,17 @@ class LLMInferencer:
 try:
     from fastapi import FastAPI, Request
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, FileResponse
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, Field
     FASTAPI_AVAILABLE = True
 except ImportError:
     FastAPI = None
     Request = None
     CORSMiddleware = None
+    JSONResponse = None
+    FileResponse = None
+    StaticFiles = None
     BaseModel = None
     Field = None
     FASTAPI_AVAILABLE = False
@@ -716,11 +167,10 @@ if FASTAPI_AVAILABLE:
     # ---------- Pydantic 请求/响应模型 ----------
 
     class GenerateRequest(BaseModel):
-        """单轮推理请求体。"""
+        """单轮推理请求体。run_id 与 (engine_type, model_name) 二选一。"""
         prompt: str = Field(..., min_length=1, description="输入提示词")
-        engine_type: Literal["ollama", "vllm", "sglang"] = Field(
-            ..., description="引擎类型"
-        )
+        run_id: Optional[str] = Field(default=None, description="已启动模型的 run_id，与 engine_type/model_name 二选一")
+        engine_type: Optional[Literal["ollama", "vllm", "sglang"]] = Field(default=None, description="引擎类型")
         model_name: str = Field(default="llama3.2", min_length=1)
         temperature: float = Field(default=0.7, ge=0, le=2)
         max_tokens: int = Field(default=1024, gt=0)
@@ -731,18 +181,20 @@ if FASTAPI_AVAILABLE:
         content: str
 
     class ChatRequest(BaseModel):
-        """多轮对话请求体。"""
+        """多轮对话请求体。run_id 与 (engine_type, model_name) 二选一。"""
         messages: List[ChatMessage] = Field(..., min_length=1)
-        engine_type: Literal["ollama", "vllm", "sglang"] = Field(...)
+        run_id: Optional[str] = Field(default=None, description="已启动模型的 run_id")
+        engine_type: Optional[Literal["ollama", "vllm", "sglang"]] = Field(default=None)
         model_name: str = Field(default="llama3.2", min_length=1)
         temperature: float = Field(default=0.7, ge=0, le=2)
         max_tokens: int = Field(default=1024, gt=0)
         top_p: float = Field(default=0.95, ge=0, le=1)
 
     class StructuredGenerateRequest(BaseModel):
-        """结构化输出请求体（仅 SGLang）。"""
+        """结构化输出请求体（仅 SGLang）。run_id 与 (engine_type, model_name) 二选一。"""
         prompt: str = Field(..., min_length=1)
-        engine_type: Literal["sglang"] = Field(...)
+        run_id: Optional[str] = Field(default=None, description="已启动模型的 run_id")
+        engine_type: Optional[Literal["sglang"]] = Field(default=None)
         model_name: str = Field(default="llama3.2", min_length=1)
         response_schema: Optional[Dict[str, Any]] = Field(None, alias="schema")
         temperature: float = Field(default=0.7, ge=0, le=2)
@@ -762,6 +214,18 @@ if FASTAPI_AVAILABLE:
         code: int
         msg: str
         data: Optional[Union[SuccessData, Dict[str, Any]]] = None
+
+    class StartModelRequest(BaseModel):
+        """启动模型请求体：配置引擎与参数后，从 HF 下载并启动，分配唯一 UID。"""
+        model_id: str = Field(..., min_length=1, description="内置模型 id，如 qwen2-0.5b、llama3.2")
+        engine_type: Literal["vllm", "sglang"] = Field(..., description="模型引擎（必选）")
+        format: Optional[str] = Field(default="pytorch", description="模型格式（必选，如 pytorch/safetensors）")
+        size: Optional[str] = Field(default="0.5B", description="模型大小（必选，如 0.5B/1B）")
+        quantization: Optional[str] = Field(default="none", description="量化（必选，如 none/int4/int8）")
+        gpu_count: Optional[str] = Field(default="auto", description="GPU 数量，auto 或数字")
+        replicas: int = Field(default=1, ge=1, description="副本数")
+        thought_mode: bool = Field(default=False, description="是否开启思考模式")
+        parse_inference: bool = Field(default=False, description="是否解析推理内容")
 
     def _make_inferencer(engine_type: str, model_name: str) -> LLMInferencer:
         """根据 engine_type 和 model_name 创建 LLMInferencer（接口层不持有长期实例）。"""
@@ -824,20 +288,112 @@ if FASTAPI_AVAILABLE:
             )
             return response
 
+        # ---------- 模型管理 API ----------
+        @app.get("/api/v1/models", response_model=ApiResponse)
+        async def api_list_models(request: Request):
+            """列出内置模型元信息（id、名称、官方地址、量化、适配引擎等）。"""
+            rid = request.state.request_id
+            data = [
+                {
+                    "id": m["id"],
+                    "name": m["name"],
+                    "official_url": m.get("official_url"),
+                    "quantizations": m.get("quantizations", []),
+                    "engines": m.get("engines", []),
+                }
+                for m in BUILTIN_MODELS
+            ]
+            return ApiResponse(request_id=rid, code=200, msg="success", data={"models": data})
+
+        @app.post("/api/v1/models/start", response_model=ApiResponse)
+        async def api_start_model(body: StartModelRequest, request: Request):
+            """从 HF 下载模型到配置路径并启动，分配唯一 UID（run_id），返回 run_id 与运行地址。"""
+            rid = request.state.request_id
+            try:
+                run_id, address = _start_model_impl(
+                    model_id=body.model_id,
+                    engine_type=body.engine_type,
+                    format=body.format,
+                    size=body.size,
+                    quantization=body.quantization,
+                    gpu_count=body.gpu_count,
+                    replicas=body.replicas,
+                    thought_mode=body.thought_mode,
+                    parse_inference=body.parse_inference,
+                )
+                return ApiResponse(
+                    request_id=rid,
+                    code=200,
+                    msg="success",
+                    data={"uid": run_id, "run_id": run_id, "address": address},
+                )
+            except (ModelNotFoundError, InvalidParameterError, EngineNotInstalledError):
+                raise
+            except Exception as e:
+                logger.exception("启动模型异常: %s", e)
+                raise
+
+        @app.get("/api/v1/models/running", response_model=ApiResponse)
+        async def api_list_running(request: Request):
+            """列出当前运行中的模型实例。"""
+            rid = request.state.request_id
+            with _running_lock:
+                items = [
+                    {
+                        "run_id": k,
+                        "model_id": v["model_id"],
+                        "engine_type": v["engine_type"],
+                        "model_name": v["model_name"],
+                        "address": v["address"],
+                        "created_at": v["created_at"],
+                    }
+                    for k, v in RUNNING_INSTANCES.items()
+                ]
+            return ApiResponse(request_id=rid, code=200, msg="success", data={"running": items})
+
+        @app.post("/api/v1/models/running/{run_id}/stop", response_model=ApiResponse)
+        async def api_stop_model(run_id: str, request: Request):
+            """停止并移除指定 run_id 的运行实例。"""
+            rid = request.state.request_id
+            existed = _stop_model_impl(run_id)
+            return ApiResponse(
+                request_id=rid,
+                code=200,
+                msg="success",
+                data={"run_id": run_id, "stopped": existed},
+            )
+
+        def _resolve_inferencer_from_body(
+            run_id: Optional[str],
+            engine_type: Optional[str],
+            model_name: str,
+        ) -> LLMInferencer:
+            """根据 run_id 或 engine_type+model_name 解析 inferencer。"""
+            if run_id:
+                inf = _get_running_inferencer(run_id)
+                if inf is None:
+                    raise InvalidParameterError(f"run_id 无效或已停止: {run_id}")
+                return inf
+            if not engine_type:
+                raise InvalidParameterError("请提供 run_id 或 engine_type")
+            return _make_inferencer(engine_type, model_name)
+
         @app.post("/api/v1/llm/generate", response_model=ApiResponse)
         async def api_generate(body: GenerateRequest, request: Request):
-            """单轮推理接口。"""
+            """单轮推理接口。可传 run_id 使用已启动模型，或传 engine_type/model_name。"""
             rid = request.state.request_id
+            inferencer = _resolve_inferencer_from_body(
+                body.run_id, body.engine_type, body.model_name
+            )
             logger.info(
                 "request_id=%s engine=%s model=%s prompt_len=%d",
                 rid,
-                body.engine_type,
-                body.model_name,
+                inferencer.engine_type,
+                inferencer.model_name,
                 len(body.prompt),
             )
             t0 = time.perf_counter()
             try:
-                inferencer = _make_inferencer(body.engine_type, body.model_name)
                 response = inferencer.generate(
                     body.prompt,
                     temperature=body.temperature,
@@ -850,8 +406,8 @@ if FASTAPI_AVAILABLE:
                     code=200,
                     msg="success",
                     data=SuccessData(
-                        engine_type=body.engine_type,
-                        model_name=body.model_name,
+                        engine_type=inferencer.engine_type,
+                        model_name=inferencer.model_name,
                         response=response,
                         cost_time=round(cost, 4),
                     ),
@@ -864,19 +420,21 @@ if FASTAPI_AVAILABLE:
 
         @app.post("/api/v1/llm/chat", response_model=ApiResponse)
         async def api_chat(body: ChatRequest, request: Request):
-            """多轮对话接口。"""
+            """多轮对话接口。可传 run_id 使用已启动模型，或传 engine_type/model_name。"""
             rid = request.state.request_id
+            inferencer = _resolve_inferencer_from_body(
+                body.run_id, body.engine_type, body.model_name
+            )
             messages = [{"role": m.role, "content": m.content} for m in body.messages]
             logger.info(
                 "request_id=%s engine=%s model=%s messages=%d",
                 rid,
-                body.engine_type,
-                body.model_name,
+                inferencer.engine_type,
+                inferencer.model_name,
                 len(messages),
             )
             t0 = time.perf_counter()
             try:
-                inferencer = _make_inferencer(body.engine_type, body.model_name)
                 response = inferencer.chat(
                     messages,
                     temperature=body.temperature,
@@ -889,8 +447,8 @@ if FASTAPI_AVAILABLE:
                     code=200,
                     msg="success",
                     data=SuccessData(
-                        engine_type=body.engine_type,
-                        model_name=body.model_name,
+                        engine_type=inferencer.engine_type,
+                        model_name=inferencer.model_name,
                         response=response,
                         cost_time=round(cost, 4),
                     ),
@@ -905,20 +463,22 @@ if FASTAPI_AVAILABLE:
         async def api_structured_generate(
             body: StructuredGenerateRequest, request: Request
         ):
-            """结构化输出接口（仅 SGLang）。"""
+            """结构化输出接口（仅 SGLang）。可传 run_id 或 engine_type=sglang/model_name。"""
             rid = request.state.request_id
-            if body.engine_type != "sglang":
+            inferencer = _resolve_inferencer_from_body(
+                body.run_id, body.engine_type, body.model_name
+            )
+            if inferencer.engine_type != "sglang":
                 raise InvalidParameterError(
-                    "structured-generate 仅支持 engine_type=sglang"
+                    "structured-generate 仅支持 SGLang 引擎（run_id 对应引擎须为 sglang）"
                 )
             logger.info(
                 "request_id=%s engine=sglang model=%s",
                 rid,
-                body.model_name,
+                inferencer.model_name,
             )
             t0 = time.perf_counter()
             try:
-                inferencer = _make_inferencer("sglang", body.model_name)
                 result = inferencer.structured_generate(
                     body.prompt,
                     schema=body.response_schema,
@@ -933,7 +493,7 @@ if FASTAPI_AVAILABLE:
                     msg="success",
                     data=SuccessData(
                         engine_type="sglang",
-                        model_name=body.model_name,
+                        model_name=inferencer.model_name,
                         response=result,
                         cost_time=round(cost, 4),
                     ),
@@ -948,6 +508,16 @@ if FASTAPI_AVAILABLE:
         async def health():
             return {"status": "ok"}
 
+        # 前端静态资源：/ 返回 index.html，/css、/js 等走静态目录
+        _frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
+        if os.path.isdir(_frontend_dir):
+            app.mount("/css", StaticFiles(directory=os.path.join(_frontend_dir, "css")), name="css")
+            app.mount("/js", StaticFiles(directory=os.path.join(_frontend_dir, "js")), name="js")
+
+            @app.get("/")
+            async def index():
+                return FileResponse(os.path.join(_frontend_dir, "index.html"))
+
         return app
 
     # 供 uvicorn 或外部挂载使用
@@ -959,54 +529,69 @@ else:
 
 # ---------- 测试用例（原生 Python 调用） ----------
 def run_core_tests() -> None:
-    """运行核心推理测试：单轮、多轮、引擎检测；Ollama 可用时跑真实推理。"""
+    """运行核心推理测试：单轮、多轮、引擎检测。"""
+    # 仅测试指定引擎：设为 "ollama" / "vllm" / "sglang" 只测该引擎；设为 None 测全部
+    test_engine: Optional[str] = "vllm"
+
     logger.info("========== 开始核心推理模块测试 ==========")
 
-    # 1) 引擎可用性
+    engines = ("ollama", "vllm", "sglang")
+    if test_engine:
+        engines = (test_engine,)
+        logger.info("当前仅测试引擎: %s", test_engine)
+
+    # 1) 引擎可用性（单引擎测试时复用此处创建的 inferencer，避免 vLLM 等重复加载占满显存）
+    reusable_inf: Optional["LLMInferencer"] = None
     logger.info("1. 引擎可用性检查")
-    for eng in ("ollama", "vllm", "sglang"):
+    for eng in engines:
         try:
             inf = LLMInferencer(engine_type=eng, model_name="llama3.2")
+            if test_engine:
+                reusable_inf = inf
             logger.info("  %s: 可用", eng)
         except EngineNotInstalledError as e:
             logger.info("  %s: 未安装 -> %s", eng, e)
-        except (EngineNotRunningError, ModelNotFoundError) as e:
+        except (EngineNotRunningError, ModelNotFoundError, OSError) as e:
             logger.info("  %s: 服务/模型异常 -> %s", eng, e)
 
-    # 2) 单轮推理（仅当 Ollama 可用且服务正常时）
+    # 2) 单轮推理
+    run_eng = test_engine or "ollama"
     try:
-        inf = LLMInferencer(engine_type="ollama", model_name="llama3.2")
+        inf = reusable_inf if (reusable_inf and test_engine) else LLMInferencer(engine_type=run_eng, model_name="llama3.2")
         out = inf.generate("你好，请用一句话介绍你自己。", max_tokens=64)
-        logger.info("2. 单轮推理(Ollama) 成功: %s", out[:80] + "..." if len(out) > 80 else out)
+        logger.info("2. 单轮推理(%s) 成功: %s", run_eng, out[:80] + "..." if len(out) > 80 else out)
     except Exception as e:
         logger.info("2. 单轮推理 跳过或失败: %s", e)
 
     # 3) 多轮对话
     try:
-        inf = LLMInferencer(engine_type="ollama", model_name="llama3.2")
+        inf = reusable_inf if (reusable_inf and test_engine) else LLMInferencer(engine_type=run_eng, model_name="llama3.2")
         msgs = [
             {"role": "user", "content": "我叫小明。"},
             {"role": "assistant", "content": "你好小明！"},
             {"role": "user", "content": "你还记得我叫什么吗？"},
         ]
         out = inf.chat(msgs, max_tokens=64)
-        logger.info("3. 多轮对话(Ollama) 成功: %s", out[:80] + "..." if len(out) > 80 else out)
+        logger.info("3. 多轮对话(%s) 成功: %s", run_eng, out[:80] + "..." if len(out) > 80 else out)
     except Exception as e:
         logger.info("3. 多轮对话 跳过或失败: %s", e)
 
     # 4) 结构化输出（仅 SGLang）
-    try:
-        inf = LLMInferencer(engine_type="sglang", model_name="llama3.2")
-        result = inf.structured_generate(
-            "请输出一个包含 name 和 age 的 JSON。",
-            schema={"name": "string", "age": "number"},
-            max_tokens=128,
-        )
-        logger.info("4. 结构化输出(SGLang) 成功: %s", result)
-    except StructuredOutputNotSupportedError:
-        logger.info("4. 结构化输出 仅支持 SGLang，已跳过")
-    except Exception as e:
-        logger.info("4. 结构化输出 跳过或失败: %s", e)
+    if not test_engine or test_engine == "sglang":
+        try:
+            inf = LLMInferencer(engine_type="sglang", model_name="llama3.2")
+            result = inf.structured_generate(
+                "请输出一个包含 name 和 age 的 JSON。",
+                schema={"name": "string", "age": "number"},
+                max_tokens=128,
+            )
+            logger.info("4. 结构化输出(SGLang) 成功: %s", result)
+        except StructuredOutputNotSupportedError:
+            logger.info("4. 结构化输出 仅支持 SGLang，已跳过")
+        except Exception as e:
+            logger.info("4. 结构化输出 跳过或失败: %s", e)
+    else:
+        logger.info("4. 结构化输出 已跳过（当前仅测试 %s）", run_eng)
 
     logger.info("========== 核心推理模块测试结束 ==========")
 
@@ -1020,6 +605,22 @@ def run_api_tests(base_url: str = "http://127.0.0.1:8000") -> None:
         return
     logger.info("========== API 接口测试（base_url=%s）==========", base_url)
     headers = {"Content-Type": "application/json"}
+
+    # 模型列表
+    try:
+        r = requests.get(f"{base_url}/api/v1/models", timeout=10)
+        j = r.json()
+        logger.info("GET /api/v1/models -> code=%s models_count=%s", j.get("code"), len((j.get("data") or {}).get("models") or []))
+    except Exception as e:
+        logger.info("GET /api/v1/models 请求失败: %s", e)
+
+    # 运行中实例列表
+    try:
+        r = requests.get(f"{base_url}/api/v1/models/running", timeout=10)
+        j = r.json()
+        logger.info("GET /api/v1/models/running -> code=%s running_count=%s", j.get("code"), len((j.get("data") or {}).get("running") or []))
+    except Exception as e:
+        logger.info("GET /api/v1/models/running 请求失败: %s", e)
 
     # 单轮
     try:

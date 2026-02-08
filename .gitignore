@@ -1,0 +1,15 @@
+# 本地配置，含敏感信息（如 hf_token），勿提交
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# 模型与缓存
+models/

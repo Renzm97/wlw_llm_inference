@@ -1,0 +1,21 @@
+{
+  "default_model_name": "llama3.2",
+  "models_dir": "./models",
+  "models_subdir_ollama": "ollama",
+  "models_subdir_hf": "HF",
+  "hf_token": null,
+  "ollama": {
+    "base_url": "http://localhost:11434"
+  },
+  "vllm": {
+    "base_url": null,
+    "local_model_path": null,
+    "model_aliases": {
+      "llama3.2": "Qwen/Qwen2-0.5B-Instruct"
+    },
+    "gpu_memory_utilization": 0.65
+  },
+  "sglang": {
+    "base_url": "http://localhost:30000"
+  }
+}
