@@ -1,7 +1,13 @@
 (function () {
   'use strict';
 
-  const API_BASE = ''; // 同源，与 FastAPI 同端口
+  // 嵌入模式：URL 参数 embed=1 或在 iframe 中时隐藏侧栏；api_base 可指定后端地址
+  const params = new URLSearchParams(window.location.search);
+  const isEmbed = params.get('embed') === '1' || (window.self !== window.top);
+  if (isEmbed) {
+    document.body.classList.add('embed-mode');
+  }
+  const API_BASE = params.get('api_base') || ''; // 同源或由父页面传入
 
   // 后端 GET /api/v1/models 返回后覆盖；未加载前用默认
   let BUILTIN_LLM = [
@@ -15,7 +21,6 @@
   ];
 
   let state = {
-    page: 'launch',
     tab: 'llm',
     selectedModel: null,
     running: [],
@@ -41,7 +46,11 @@
     container.innerHTML = list
       .map(
         (m) =>
-          `<div class="model-card" data-id="${m.id}" data-name="${m.name}">${m.name}</div>`
+          `<div class="model-card" data-id="${m.id}" data-name="${m.name}">
+            <div class="name">${m.name}</div>
+            <div class="desc">模型简介，支持生成与对话。</div>
+            <div class="tags">4K · generate model</div>
+          </div>`
       )
       .join('');
 
@@ -68,38 +77,21 @@
     showConfigForm(state.selectedModel);
   }
 
-  function openConfigDrawer() {
-    $('#config-drawer-backdrop').classList.add('open');
-    $('#config-drawer').classList.add('open');
-    $('#config-drawer-backdrop').setAttribute('aria-hidden', 'false');
-    $('#config-drawer').setAttribute('aria-hidden', 'false');
-  }
-
-  function closeConfigDrawer() {
-    $('#config-drawer-backdrop').classList.remove('open');
-    $('#config-drawer').classList.remove('open');
-    $('#config-drawer-backdrop').setAttribute('aria-hidden', 'true');
-    $('#config-drawer').setAttribute('aria-hidden', 'true');
-  }
-
   function closeConfigPanel() {
-    closeConfigDrawer();
     state.selectedModel = null;
+    var nameEl = document.getElementById('config-model-name');
+    if (nameEl) nameEl.textContent = '请选择模型';
     $$('.model-card').forEach((c) => c.classList.remove('selected'));
   }
 
   function showConfigForm(model) {
     const form = $('#config-form');
     const nameEl = $('#config-model-name');
-    if (!model) {
-      closeConfigDrawer();
-      return;
-    }
+    if (!model) return;
     nameEl.textContent = model.name;
     form.dataset.modelId = model.id;
     form.dataset.modelName = model.name;
     resetFormToDefault();
-    openConfigDrawer();
   }
 
   function resetFormToDefault() {
@@ -161,10 +153,14 @@
 
   function onLaunch(e) {
     e.preventDefault();
-    const modelId = $('#config-form').dataset.modelId;
-    const modelName = $('#config-form').dataset.modelName;
+    const form = $('#config-form');
+    const modelId = form && form.dataset.modelId;
+    const modelName = form && form.dataset.modelName;
     const cfg = getFormValues();
-    if (!modelId || !modelName || !cfg) return;
+    if (!modelId || !modelName || !cfg) {
+      alert('请先选择模型');
+      return;
+    }
 
     const btn = $('#btn-launch');
     if (btn.disabled) return;
@@ -226,8 +222,6 @@
           };
           state.running.push(record);
           closeConfigPanel();
-          setTab('llm');
-          setPage('running');
           renderRunningTable();
           return data;
         });
@@ -283,9 +277,9 @@
       ? state.running.filter((r) => r.engine && ['ollama', 'vllm', 'sglang'].includes(String(r.engine).toLowerCase()))
       : state.running.filter((r) => BUILTIN_EMBED.some((m) => m.id === r.modelId));
     if (list.length === 0) {
-      tbody.innerHTML = '';
-      if (empty) empty.classList.remove('hidden');
-      if (wrap) wrap.classList.add('table-wrap-empty');
+      tbody.innerHTML = '<tr><td colspan="9" class="table-empty-cell">暂无运行中的模型</td></tr>';
+      if (empty) empty.classList.add('hidden');
+      if (wrap) wrap.classList.remove('table-wrap-empty');
       return;
     }
     if (empty) empty.classList.add('hidden');
@@ -320,22 +314,11 @@
     });
   }
 
-  function setPage(page) {
-    state.page = page;
-    $$('.nav-item').forEach((a) => a.classList.toggle('active', a.dataset.page === page));
-    $$('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + page));
-    if (page === 'running') {
-      state.tab = 'llm';
-      $$('.tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === 'llm'));
-      renderRunningTable();
-    }
-  }
-
   function setTab(tab) {
     state.tab = tab;
     $$('.tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
     renderModelCards();
-    if (state.page === 'running') renderRunningTable();
+    renderRunningTable();
   }
 
   function openInferenceDrawer(record) {
@@ -546,13 +529,6 @@
     loadModelsFromBackend();
     loadRunningFromBackend();
 
-    $$('.nav-item').forEach((a) => {
-      a.addEventListener('click', (e) => {
-        e.preventDefault();
-        setPage(a.dataset.page);
-      });
-    });
-
     $$('.tabs .tab').forEach((t) => {
       t.addEventListener('click', () => setTab(t.dataset.tab));
     });
@@ -562,7 +538,6 @@
     });
     $('#config-form')?.addEventListener('submit', onLaunch);
     $('#btn-cancel')?.addEventListener('click', closeConfigPanel);
-    $('#config-drawer-backdrop')?.addEventListener('click', closeConfigPanel);
 
     $('#btn-close-inference')?.addEventListener('click', closeInferenceDrawer);
     $('#inference-backdrop')?.addEventListener('click', closeInferenceDrawer);
