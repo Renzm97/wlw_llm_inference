@@ -254,6 +254,16 @@ def _start_model_impl(
     return run_id, address
 
 
+def _user_facing_start_error(exc: Exception) -> str:
+    """将启动模型时的异常转为用户可读的提示（如显存不足）。"""
+    msg = str(exc).lower()
+    if isinstance(exc, (ValueError, RuntimeError)) and (
+        "memory" in msg or "gpu" in msg or "engine core initialization failed" in msg or "free memory" in msg
+    ):
+        return "GPU 显存不足，无法再加载新模型。请先停止「运行模型」中已有的 vLLM 实例，或在 config.json 中调低 vllm.gpu_memory_utilization 后重试。"
+    return str(exc)
+
+
 def _stop_model_impl(run_id: str) -> bool:
     """从注册表移除运行实例，返回是否曾存在。"""
     with _running_lock:
@@ -507,6 +517,12 @@ if FASTAPI_AVAILABLE:
                 )
             except (ModelNotFoundError, InvalidParameterError, EngineNotInstalledError):
                 raise
+            except (ValueError, RuntimeError) as e:
+                friendly = _user_facing_start_error(e)
+                if friendly != str(e):
+                    logger.warning("启动模型显存不足: %s", e)
+                    raise EngineNotRunningError(friendly) from e
+                raise
             except Exception as e:
                 logger.exception("启动模型异常: %s", e)
                 raise
@@ -539,7 +555,7 @@ if FASTAPI_AVAILABLE:
                     result_holder.append(("ok", run_id, address))
                 except Exception as e:
                     logger.exception("启动模型流式异常: %s", e)
-                    result_holder.append(("err", str(e)))
+                    result_holder.append(("err", _user_facing_start_error(e)))
 
             thread = threading.Thread(target=run_start)
             thread.start()
@@ -583,6 +599,10 @@ if FASTAPI_AVAILABLE:
                         "model_name": v["model_name"],
                         "address": v["address"],
                         "created_at": v["created_at"],
+                        "gpu_count": v.get("gpu_count"),
+                        "quantization": v.get("quantization"),
+                        "size": v.get("size"),
+                        "replicas": v.get("replicas"),
                     }
                     for k, v in RUNNING_INSTANCES.items()
                 ]

@@ -298,6 +298,10 @@
             <td>${r.name}</td>
             <td>${r.address}</td>
             <td>${r.engine}</td>
+            <td>${r.gpuIndex != null ? r.gpuIndex : 'auto'}</td>
+            <td>${r.quantization != null ? r.quantization : '-'}</td>
+            <td>${r.size != null ? r.size : '-'}</td>
+            <td>${r.replicas != null ? r.replicas : 1}</td>
             <td class="actions-cell">
               <button type="button" class="btn btn-sm btn-primary btn-infer" data-run-index="${list.indexOf(r)}">推理</button>
               <button type="button" class="btn btn-sm btn-danger" data-stop-id="${r.id}">停止</button>
@@ -505,10 +509,10 @@
       name: r.model_name || r.model_id,
       modelId: r.model_id,
       address: r.address,
-      gpuIndex: 'auto',
-      quantization: 'none',
-      size: '-',
-      replicas: 1,
+      gpuIndex: r.gpu_count != null ? String(r.gpu_count) : 'auto',
+      quantization: r.quantization != null ? String(r.quantization) : 'none',
+      size: r.size != null ? String(r.size) : '-',
+      replicas: r.replicas != null ? Number(r.replicas) : 1,
       engine: r.engine_type,
     };
   }
