@@ -48,6 +48,20 @@ pip install pydantic fastapi uvicorn requests httpx
 **关于「用 Ollama 拉取的模型路径」：**  
 Ollama 拉取后的模型是其**自有格式**，不是 Hugging Face 的目录结构，**不能**直接作为 vLLM 的 `local_model_path`。若要用 vLLM 跑本地模型，需使用 **HF 格式** 的模型目录（可从 Hugging Face 下载或另存为 HF 格式），把该目录路径填到 `vllm.local_model_path` 或 `vllm.model_aliases` 中即可。
 
+**模型目录（models.json）：**  
+项目根目录下的 **`models.json`** 用于配置首页展示的**多模型**及每个模型可选的**大小、引擎、量化、格式**，前端参数配置会根据该文件动态显示选项，启动时按「模型 + 大小」解析出对应的 Hugging Face repo 或 Ollama 名称并下载/拉取。
+
+- 若不存在 `models.json`，后端使用内置的少量模型列表（兼容旧行为）。
+- 可通过环境变量 **`MODELS_CONFIG`** 指定模型配置路径。
+- 示例结构见 **`models.example.json`**。每个模型需包含：
+  - `id`、`name`、`description`、`official_url`
+  - **`sizes`**：数组，每项 `{ "size": "0.5B", "hf_repo": "Qwen/Qwen2-0.5B-Instruct", "ollama_name": "qwen2:0.5b" }`
+  - **`quantizations`**：如 `["none", "int4", "int8"]`
+  - **`engines`**：如 `["ollama", "vllm", "sglang"]`
+  - **`formats`**：如 `["pytorch", "safetensors"]`
+
+启动模型时请在前端选择**模型 → 大小 → 引擎 → 量化/格式**，后端会根据 `model_id` + `size` 从 `models.json` 中解析出 `hf_repo` / `ollama_name` 并执行下载或 Ollama 拉取。
+
 ### 3. 环境准备
 
 - **Ollama**：安装并启动 [Ollama](https://ollama.com)，执行 `ollama pull llama3.2` 等拉取模型。
@@ -56,22 +70,56 @@ Ollama 拉取后的模型是其**自有格式**，不是 Hugging Face 的目录�
 
 ### 4. 运行方式
 
+**推荐使用主入口 `main.py`：**
+
 - **仅跑测试**（检测引擎可用性，Ollama 可用时会真实推理）：
   ```bash
-  python llm_inference.py
+  python main.py
   ```
 - **启动 API 服务**（默认 `0.0.0.0:8000`）：
   ```bash
-  python llm_inference.py --serve
-  python llm_inference.py --serve --host 0.0.0.0 --port 8000
+  python main.py --serve
+  python main.py --serve --host 0.0.0.0 --port 8000
   ```
   启动后访问 **http://localhost:8000/** 可打开前端界面（启动模型 / 运行模型，蓝白灰简洁风格）。
 - **API 接口测试**（需先启动服务）：
   ```bash
-  python llm_inference.py --api-test --port 8000
+  python main.py --api-test --port 8000
   ```
 
-### 5. 接口文档
+兼容旧入口：`python llm_inference.py [--serve]` 与上述等价。
+
+### 5. Backend 代码结构
+
+```
+main.py                 # 主入口：python main.py [--serve] / 测试
+config.json             # 配置文件（可选）
+frontend/               # 前端静态资源
+
+core/                   # 推理核心
+  __init__.py           # 对外导出 CONFIG、LLMInferencer、异常等
+  config.py             # 配置加载、模型目录、BUILTIN_MODELS、ensure_model_downloaded
+  exceptions.py         # 异常类
+  adapters/             # 引擎适配器
+    base.py             # BaseLLMAdapter
+    ollama.py / vllm.py / sglang.py
+  inferencer.py         # LLMInferencer、validate_model_usable
+
+services/               # 服务层
+  instances.py          # 运行实例管理：start_model_impl、stop_model_impl、get_running_inferencer
+
+api/                    # HTTP API 层
+  app.py                # create_app()：FastAPI、中间件、异常处理、静态资源
+  schemas.py            # Pydantic 请求/响应模型
+  routes/
+    models.py           # /api/v1/models、start、start-stream、running、stop
+    llm.py              # /api/v1/llm/generate、chat、structured-generate
+
+inference_core.py       # 兼容层：from core 重新导出（旧代码可继续 from inference_core import ...）
+llm_inference.py       # 兼容层：from core/services/api 重新导出，__main__ 调用 main.main()
+```
+
+### 6. 接口文档
 
 服务启动后：
 
@@ -81,7 +129,7 @@ Ollama 拉取后的模型是其**自有格式**，不是 Hugging Face 的目录�
 
 ## 如何查看和测试所有后端接口
 
-先启动服务：`python llm_inference.py --serve`（默认 http://0.0.0.0:8000）。
+先启动服务：`python main.py --serve`（默认 http://0.0.0.0:8000）。
 
 ### 查看接口
 

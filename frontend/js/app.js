@@ -9,10 +9,10 @@
   }
   const API_BASE = params.get('api_base') || ''; // 同源或由父页面传入
 
-  // 后端 GET /api/v1/models 返回后覆盖；未加载前用默认
+  // 后端 GET /api/v1/models 返回后覆盖；每项可为 { id, name, description?, sizes, quantizations, engines, formats }
   let BUILTIN_LLM = [
-    { id: 'llama3.2', name: 'Llama 3.2' },
-    { id: 'qwen2-0.5b', name: 'Qwen2 0.5B' },
+    { id: 'llama3.2', name: 'Llama 3.2', sizes: [{ size: '1B' }], quantizations: ['none'], engines: ['ollama', 'vllm', 'sglang'], formats: ['pytorch', 'safetensors'] },
+    { id: 'qwen2', name: 'Qwen2', sizes: [{ size: '0.5B' }], quantizations: ['none'], engines: ['ollama', 'vllm', 'sglang'], formats: ['pytorch', 'safetensors'] },
   ];
 
   const BUILTIN_EMBED = [
@@ -28,6 +28,7 @@
     modelsLoaded: false,
     inferenceRecord: null,
     chatMessages: [],
+    logAutoRefreshTimer: null,
   };
 
   var loadRunningAbortController = null;
@@ -43,15 +44,18 @@
     const other = state.tab === 'llm' ? containerEmbed : containerLlm;
     other.classList.add('hidden');
     container.classList.remove('hidden');
+    const isLlm = state.tab === 'llm';
     container.innerHTML = list
-      .map(
-        (m) =>
-          `<div class="model-card" data-id="${m.id}" data-name="${m.name}">
-            <div class="name">${m.name}</div>
-            <div class="desc">模型简介，支持生成与对话。</div>
-            <div class="tags">4K · generate model</div>
-          </div>`
-      )
+      .map(function (m) {
+        const desc = (isLlm && m.description) ? m.description : '模型简介，支持生成与对话。';
+        const sizesLabel = (isLlm && m.sizes && m.sizes.length) ? m.sizes.map(function (s) { return s.size || s; }).join(' / ') : '';
+        const tags = sizesLabel ? sizesLabel + ' · generate model' : '4K · generate model';
+        return '<div class="model-card" data-id="' + escapeHtml(m.id) + '" data-name="' + escapeHtml(m.name) + '">' +
+          '<div class="name">' + escapeHtml(m.name) + '</div>' +
+          '<div class="desc">' + escapeHtml(desc) + '</div>' +
+          '<div class="tags">' + escapeHtml(tags) + '</div>' +
+          '</div>';
+      })
       .join('');
 
     container.querySelectorAll('.model-card').forEach((card) => {
@@ -73,7 +77,10 @@
   function selectModel(cardEl) {
     $$('.model-card').forEach((c) => c.classList.remove('selected'));
     cardEl.classList.add('selected');
-    state.selectedModel = { id: cardEl.dataset.id, name: cardEl.dataset.name };
+    const id = cardEl.dataset.id;
+    const name = cardEl.dataset.name;
+    const full = (state.tab === 'llm' && BUILTIN_LLM) ? BUILTIN_LLM.find(function (m) { return m.id === id; }) : null;
+    state.selectedModel = full || { id: id, name: name };
     showConfigForm(state.selectedModel);
   }
 
@@ -88,10 +95,52 @@
     const form = $('#config-form');
     const nameEl = $('#config-model-name');
     if (!model) return;
-    nameEl.textContent = model.name;
+    nameEl.textContent = model.name || model.id;
     form.dataset.modelId = model.id;
-    form.dataset.modelName = model.name;
-    resetFormToDefault();
+    form.dataset.modelName = model.name || model.id;
+    fillConfigOptionsFromModel(model);
+  }
+
+  function fillConfigOptionsFromModel(model) {
+    const form = $('#config-form');
+    if (!form) return;
+    var engineSel = form.querySelector('#config-engine') || form.querySelector('[name="engine"]');
+    var formatSel = form.querySelector('#config-format') || form.querySelector('[name="format"]');
+    var sizeSel = form.querySelector('#config-size') || form.querySelector('[name="size"]');
+    var quantSel = form.querySelector('#config-quantization') || form.querySelector('[name="quantization"]');
+    var engines = (model.engines && model.engines.length) ? model.engines : ['ollama', 'vllm', 'sglang'];
+    var formats = (model.formats && model.formats.length) ? model.formats : ['pytorch', 'safetensors'];
+    var sizes = (model.sizes && model.sizes.length) ? model.sizes : [{ size: '1B' }];
+    var quants = (model.quantizations && model.quantizations.length) ? model.quantizations : ['none'];
+    var engineLabels = { ollama: 'Ollama', vllm: 'vLLM', sglang: 'SGLang' };
+    var formatLabels = { pytorch: 'PyTorch', safetensors: 'SafeTensors' };
+    var quantLabels = { none: '无', int4: 'INT4', int8: 'INT8' };
+    if (engineSel) {
+      engineSel.innerHTML = engines.map(function (v) { return '<option value="' + v + '">' + (engineLabels[v] || v) + '</option>'; }).join('');
+      engineSel.value = engines[0];
+    }
+    if (formatSel) {
+      formatSel.innerHTML = formats.map(function (v) { return '<option value="' + v + '">' + (formatLabels[v] || v) + '</option>'; }).join('');
+      formatSel.value = formats[0];
+    }
+    if (sizeSel) {
+      sizeSel.innerHTML = sizes.map(function (s) {
+        var sizeVal = typeof s === 'string' ? s : (s.size || s.hf_repo || '');
+        sizeVal = String(sizeVal || '');
+        return '<option value="' + escapeHtml(sizeVal) + '">' + escapeHtml(sizeVal) + '</option>';
+      }).join('');
+      var firstSize = sizes[0];
+      sizeSel.value = firstSize ? (typeof firstSize === 'string' ? firstSize : (firstSize.size || '1B')) : '1B';
+    }
+    if (quantSel) {
+      quantSel.innerHTML = quants.map(function (v) { return '<option value="' + v + '">' + (quantLabels[v] || v) + '</option>'; }).join('');
+      quantSel.value = quants[0];
+    }
+    form.gpu_count.value = 'auto';
+    form.replicas.value = '1';
+    form.thought_mode.checked = true;
+    form.parse_inference.checked = false;
+    if (form.extra) form.extra.value = '';
   }
 
   function resetFormToDefault() {
@@ -99,7 +148,7 @@
     if (!form) return;
     form.engine.value = 'ollama';
     form.format.value = 'pytorch';
-    form.size.value = '3B';
+    form.size.value = '1B';
     form.quantization.value = 'none';
     form.gpu_count.value = 'auto';
     form.replicas.value = '1';
@@ -223,6 +272,7 @@
           state.running.push(record);
           closeConfigPanel();
           renderRunningTable();
+          loadLogsFromBackend();
           return data;
         });
       })
@@ -253,6 +303,7 @@
             return r.id !== id;
           });
           renderRunningTable();
+          loadLogsFromBackend();
         })
         .catch(function () {
           state.running = state.running.filter(function (r) {
@@ -461,9 +512,62 @@
   }
 
   function escapeHtml(s) {
+    if (s == null) return '';
     const div = document.createElement('div');
     div.textContent = s;
     return div.innerHTML;
+  }
+
+  function formatLogTs(ts) {
+    if (ts == null) return '';
+    var d = new Date(ts * 1000);
+    var pad = function (n) { return n < 10 ? '0' + n : n; };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+      pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+
+  function renderLogs(logs) {
+    const el = $('#log-content');
+    if (!el) return;
+    if (!logs || !logs.length) {
+      el.textContent = '暂无运行日志';
+      return;
+    }
+    var levelClass = function (level) {
+      if (level === 'ERROR') return 'log-line--error';
+      if (level === 'WARNING') return 'log-line--warning';
+      return 'log-line--info';
+    };
+    el.innerHTML = logs
+      .map(function (e) {
+        var ts = formatLogTs(e.ts);
+        var level = (e.level || 'INFO').toUpperCase();
+        var msg = e.message || '';
+        var extra = [];
+        if (e.engine) extra.push('engine=' + e.engine);
+        if (e.run_id) extra.push('run_id=' + (e.run_id.length > 8 ? e.run_id.slice(0, 8) + '…' : e.run_id));
+        if (e.model_id) extra.push('model=' + e.model_id);
+        var line = '[' + ts + '] ' + level + '  ' + msg;
+        if (extra.length) line += '  (' + extra.join(', ') + ')';
+        return '<span class="' + levelClass(level) + '">' + escapeHtml(line) + '</span>';
+      })
+      .join('\n');
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function loadLogsFromBackend() {
+    fetch(API_BASE + '/api/v1/logs?limit=200')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (data.code === 200 && data.data && Array.isArray(data.data.logs)) {
+          renderLogs(data.data.logs);
+        } else {
+          $('#log-content').textContent = '加载失败';
+        }
+      })
+      .catch(function () {
+        $('#log-content').textContent = '加载失败';
+      });
   }
 
   function loadModelsFromBackend() {
@@ -474,7 +578,15 @@
       .then(function (data) {
         if (data.code === 200 && data.data && Array.isArray(data.data.models)) {
           BUILTIN_LLM = data.data.models.map(function (m) {
-            return { id: m.id, name: m.name || m.id };
+            return {
+              id: m.id,
+              name: m.name || m.id,
+              description: m.description || '',
+              sizes: m.sizes || [],
+              quantizations: m.quantizations || ['none'],
+              engines: m.engines || ['ollama', 'vllm', 'sglang'],
+              formats: m.formats || ['pytorch', 'safetensors'],
+            };
           });
           state.modelsLoaded = true;
         }
@@ -528,6 +640,7 @@
     renderRunningTable();
     loadModelsFromBackend();
     loadRunningFromBackend();
+    loadLogsFromBackend();
 
     $$('.tabs .tab').forEach((t) => {
       t.addEventListener('click', () => setTab(t.dataset.tab));
@@ -535,6 +648,20 @@
 
     $('#btn-refresh-running')?.addEventListener('click', function () {
       loadRunningFromBackend();
+    });
+
+    $('#btn-refresh-logs')?.addEventListener('click', function () {
+      loadLogsFromBackend();
+    });
+
+    $('#log-auto-refresh')?.addEventListener('change', function () {
+      if (state.logAutoRefreshTimer) {
+        clearInterval(state.logAutoRefreshTimer);
+        state.logAutoRefreshTimer = null;
+      }
+      if (this.checked) {
+        state.logAutoRefreshTimer = setInterval(loadLogsFromBackend, 3000);
+      }
     });
     $('#config-form')?.addEventListener('submit', onLaunch);
     $('#btn-cancel')?.addEventListener('click', closeConfigPanel);

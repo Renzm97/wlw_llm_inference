@@ -1,6 +1,9 @@
 # 本地配置，含敏感信息（如 hf_token），勿提交
 config.json
 
+# 日志（本地运行产生，不提交）
+log.txt
+
 # Python
 __pycache__/
 *.py[cod]

@@ -48,9 +48,12 @@ INFO 02-08 20:39:45 [vllm.py:624] Asynchronous scheduling is enabled.
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m ERROR 02-08 20:39:51 [fa_utils.py:86] Cannot use FA version 2 is not supported due to FA2 is only supported on devices with compute capability >= 8
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m INFO 02-08 20:39:52 [cuda.py:364] Using TRITON_ATTN attention backend out of potential backends: ('TRITON_ATTN', 'FLEX_ATTENTION')
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m INFO 02-08 20:39:54 [weight_utils.py:567] No model.safetensors.index.json found in remote.
-[0;36m(EngineCore_DP0 pid=2841396)[0;0m Loading safetensors checkpoint shards:   0% Completed | 0/1 [00:00<?, ?it/s]
-[0;36m(EngineCore_DP0 pid=2841396)[0;0m Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:00<00:00,  1.68it/s]
-[0;36m(EngineCore_DP0 pid=2841396)[0;0m Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:00<00:00,  1.68it/s]
+[0;36m(EngineCore_DP0 pid=2841396)[0;0m 
+Loading safetensors checkpoint shards:   0% Completed | 0/1 [00:00<?, ?it/s]
+[0;36m(EngineCore_DP0 pid=2841396)[0;0m 
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:00<00:00,  1.68it/s]
+[0;36m(EngineCore_DP0 pid=2841396)[0;0m 
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:00<00:00,  1.68it/s]
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m 
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m INFO 02-08 20:39:55 [default_loader.py:291] Loading weights took 0.63 seconds
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m INFO 02-08 20:39:55 [gpu_model_runner.py:4118] Model loading took 0.93 GiB memory and 3.293997 seconds
@@ -61,14 +64,57 @@ INFO 02-08 20:39:45 [vllm.py:624] Asynchronous scheduling is enabled.
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m INFO 02-08 20:40:06 [gpu_worker.py:356] Available KV cache memory: 11.18 GiB
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m INFO 02-08 20:40:06 [kv_cache_utils.py:1307] GPU KV cache size: 976,624 tokens
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m INFO 02-08 20:40:06 [kv_cache_utils.py:1312] Maximum concurrency for 32,768 tokens per request: 29.80x
-[0;36m(EngineCore_DP0 pid=2841396)[0;0m Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   0%|          | 0/51 [00:00<?, ?it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   4%|▍         | 2/51 [00:00<00:04, 11.31it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   8%|▊         | 4/51 [00:00<00:03, 12.46it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  12%|█▏        | 6/51 [00:00<00:03, 12.62it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  16%|█▌        | 8/51 [00:00<00:03, 12.38it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  20%|█▉        | 10/51 [00:00<00:03, 12.95it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  25%|██▌       | 13/51 [00:00<00:02, 16.11it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  31%|███▏      | 16/51 [00:01<00:02, 16.98it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  35%|███▌      | 18/51 [00:01<00:02, 15.66it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  39%|███▉      | 20/51 [00:01<00:02, 15.25it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  43%|████▎     | 22/51 [00:01<00:01, 14.55it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  47%|████▋     | 24/51 [00:01<00:01, 13.97it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  53%|█████▎    | 27/51 [00:01<00:01, 16.48it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  59%|█████▉    | 30/51 [00:01<00:01, 18.53it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  63%|██████▎   | 32/51 [00:02<00:01, 18.01it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  67%|██████▋   | 34/51 [00:02<00:01, 16.72it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  71%|███████   | 36/51 [00:02<00:00, 15.85it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  75%|███████▍  | 38/51 [00:02<00:00, 14.28it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  78%|███████▊  | 40/51 [00:02<00:00, 14.25it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  84%|████████▍ | 43/51 [00:02<00:00, 16.61it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  90%|█████████ | 46/51 [00:02<00:00, 18.75it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  94%|█████████▍| 48/51 [00:03<00:00, 17.33it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  98%|█████████▊| 50/51 [00:03<00:00, 16.15it/s]Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 51/51 [00:03<00:00, 15.38it/s]
-[0;36m(EngineCore_DP0 pid=2841396)[0;0m Capturing CUDA graphs (decode, FULL):   0%|          | 0/35 [00:00<?, ?it/s]Capturing CUDA graphs (decode, FULL):   3%|▎         | 1/35 [00:00<00:06,  5.38it/s]Capturing CUDA graphs (decode, FULL):   9%|▊         | 3/35 [00:00<00:03, 10.50it/s]Capturing CUDA graphs (decode, FULL):  17%|█▋        | 6/35 [00:00<00:01, 16.35it/s]Capturing CUDA graphs (decode, FULL):  26%|██▌       | 9/35 [00:00<00:01, 19.24it/s]Capturing CUDA graphs (decode, FULL):  34%|███▍      | 12/35 [00:00<00:01, 21.13it/s]Capturing CUDA graphs (decode, FULL):  43%|████▎     | 15/35 [00:00<00:00, 22.59it/s]Capturing CUDA graphs (decode, FULL):  51%|█████▏    | 18/35 [00:00<00:00, 22.72it/s]Capturing CUDA graphs (decode, FULL):  60%|██████    | 21/35 [00:01<00:00, 22.84it/s]Capturing CUDA graphs (decode, FULL):  69%|██████▊   | 24/35 [00:01<00:00, 21.97it/s]Capturing CUDA graphs (decode, FULL):  77%|███████▋  | 27/35 [00:01<00:00, 15.30it/s]Capturing CUDA graphs (decode, FULL):  86%|████████▌ | 30/35 [00:01<00:00, 16.88it/s]Capturing CUDA graphs (decode, FULL):  94%|█████████▍| 33/35 [00:01<00:00, 18.58it/s]Capturing CUDA graphs (decode, FULL): 100%|██████████| 35/35 [00:01<00:00, 17.91it/s]
+[0;36m(EngineCore_DP0 pid=2841396)[0;0m 
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   0%|          | 0/51 [00:00<?, ?it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   4%|▍         | 2/51 [00:00<00:04, 11.31it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):   8%|▊         | 4/51 [00:00<00:03, 12.46it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  12%|█▏        | 6/51 [00:00<00:03, 12.62it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  16%|█▌        | 8/51 [00:00<00:03, 12.38it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  20%|█▉        | 10/51 [00:00<00:03, 12.95it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  25%|██▌       | 13/51 [00:00<00:02, 16.11it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  31%|███▏      | 16/51 [00:01<00:02, 16.98it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  35%|███▌      | 18/51 [00:01<00:02, 15.66it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  39%|███▉      | 20/51 [00:01<00:02, 15.25it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  43%|████▎     | 22/51 [00:01<00:01, 14.55it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  47%|████▋     | 24/51 [00:01<00:01, 13.97it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  53%|█████▎    | 27/51 [00:01<00:01, 16.48it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  59%|█████▉    | 30/51 [00:01<00:01, 18.53it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  63%|██████▎   | 32/51 [00:02<00:01, 18.01it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  67%|██████▋   | 34/51 [00:02<00:01, 16.72it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  71%|███████   | 36/51 [00:02<00:00, 15.85it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  75%|███████▍  | 38/51 [00:02<00:00, 14.28it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  78%|███████▊  | 40/51 [00:02<00:00, 14.25it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  84%|████████▍ | 43/51 [00:02<00:00, 16.61it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  90%|█████████ | 46/51 [00:02<00:00, 18.75it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  94%|█████████▍| 48/51 [00:03<00:00, 17.33it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE):  98%|█████████▊| 50/51 [00:03<00:00, 16.15it/s]
+Capturing CUDA graphs (mixed prefill-decode, PIECEWISE): 100%|██████████| 51/51 [00:03<00:00, 15.38it/s]
+[0;36m(EngineCore_DP0 pid=2841396)[0;0m 
+Capturing CUDA graphs (decode, FULL):   0%|          | 0/35 [00:00<?, ?it/s]
+Capturing CUDA graphs (decode, FULL):   3%|▎         | 1/35 [00:00<00:06,  5.38it/s]
+Capturing CUDA graphs (decode, FULL):   9%|▊         | 3/35 [00:00<00:03, 10.50it/s]
+Capturing CUDA graphs (decode, FULL):  17%|█▋        | 6/35 [00:00<00:01, 16.35it/s]
+Capturing CUDA graphs (decode, FULL):  26%|██▌       | 9/35 [00:00<00:01, 19.24it/s]
+Capturing CUDA graphs (decode, FULL):  34%|███▍      | 12/35 [00:00<00:01, 21.13it/s]
+Capturing CUDA graphs (decode, FULL):  43%|████▎     | 15/35 [00:00<00:00, 22.59it/s]
+Capturing CUDA graphs (decode, FULL):  51%|█████▏    | 18/35 [00:00<00:00, 22.72it/s]
+Capturing CUDA graphs (decode, FULL):  60%|██████    | 21/35 [00:01<00:00, 22.84it/s]
+Capturing CUDA graphs (decode, FULL):  69%|██████▊   | 24/35 [00:01<00:00, 21.97it/s]
+Capturing CUDA graphs (decode, FULL):  77%|███████▋  | 27/35 [00:01<00:00, 15.30it/s]
+Capturing CUDA graphs (decode, FULL):  86%|████████▌ | 30/35 [00:01<00:00, 16.88it/s]
+Capturing CUDA graphs (decode, FULL):  94%|█████████▍| 33/35 [00:01<00:00, 18.58it/s]
+Capturing CUDA graphs (decode, FULL): 100%|██████████| 35/35 [00:01<00:00, 17.91it/s]
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m INFO 02-08 20:40:12 [gpu_model_runner.py:5051] Graph capturing finished in 6 secs, took 6.49 GiB
 [0;36m(EngineCore_DP0 pid=2841396)[0;0m INFO 02-08 20:40:12 [core.py:272] init engine (profile, create kv cache, warmup model) took 16.75 seconds
 INFO 02-08 20:40:14 [llm.py:343] Supported tasks: ['generate']
 [2026-02-08 20:40:14] INFO inference_core.py:498: LLMInferencer 初始化成功: engine=vllm, model=qwen2-0.5b
-Adding requests:   0%|          | 0/1 [00:00<?, ?it/s]Adding requests: 100%|██████████| 1/1 [00:00<00:00, 102.83it/s]
-Processed prompts:   0%|          | 0/1 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts: 100%|██████████| 1/1 [00:00<00:00, 20.94it/s, est. speed input: 20.97 toks/s, output: 104.76 toks/s]Processed prompts: 100%|██████████| 1/1 [00:00<00:00, 20.86it/s, est. speed input: 20.97 toks/s, output: 104.76 toks/s]
+
+Adding requests:   0%|          | 0/1 [00:00<?, ?it/s]
+Adding requests: 100%|██████████| 1/1 [00:00<00:00, 102.83it/s]
+
+Processed prompts:   0%|          | 0/1 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]
+Processed prompts: 100%|██████████| 1/1 [00:00<00:00, 20.94it/s, est. speed input: 20.97 toks/s, output: 104.76 toks/s]
+Processed prompts: 100%|██████████| 1/1 [00:00<00:00, 20.86it/s, est. speed input: 20.97 toks/s, output: 104.76 toks/s]
 [2026-02-08 20:40:14] INFO llm_inference.py:253: 已启动模型 uid=cc34b04f-d7d5-4135-8cb9-387c23091a4b model_id=qwen2-0.5b engine=vllm address=http://localhost:8000
 [2026-02-08 20:40:14] INFO llm_inference.py:459: request_id=53921bc9-3584-4365-88bf-df4aa083ffff path=/api/v1/models/start status=200
 INFO:     127.0.0.1:59946 - "POST /api/v1/models/start HTTP/1.1" 200 OK
@@ -81,8 +127,14 @@ INFO:     127.0.0.1:47876 - "GET /api/v1/models HTTP/1.1" 200 OK
 [2026-02-08 20:42:46] INFO llm_inference.py:459: request_id=7db31f4c-97d5-42c0-8b1c-6d07575be3d3 path=/api/v1/models/running status=200
 INFO:     127.0.0.1:47890 - "GET /api/v1/models/running HTTP/1.1" 200 OK
 [2026-02-08 20:42:58] INFO llm_inference.py:630: request_id=9133c43c-57ad-4c62-bc41-dba69235922a engine=vllm model=qwen2-0.5b prompt_len=4
-Adding requests:   0%|          | 0/1 [00:00<?, ?it/s]Adding requests: 100%|██████████| 1/1 [00:00<00:00, 658.76it/s]
-Processed prompts:   0%|          | 0/1 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts: 100%|██████████| 1/1 [00:09<00:00,  9.10s/it, est. speed input: 0.22 toks/s, output: 112.55 toks/s]Processed prompts: 100%|██████████| 1/1 [00:09<00:00,  9.10s/it, est. speed input: 0.22 toks/s, output: 112.55 toks/s]Processed prompts: 100%|██████████| 1/1 [00:09<00:00,  9.10s/it, est. speed input: 0.22 toks/s, output: 112.55 toks/s]
+
+Adding requests:   0%|          | 0/1 [00:00<?, ?it/s]
+Adding requests: 100%|██████████| 1/1 [00:00<00:00, 658.76it/s]
+
+Processed prompts:   0%|          | 0/1 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]
+Processed prompts: 100%|██████████| 1/1 [00:09<00:00,  9.10s/it, est. speed input: 0.22 toks/s, output: 112.55 toks/s]
+Processed prompts: 100%|██████████| 1/1 [00:09<00:00,  9.10s/it, est. speed input: 0.22 toks/s, output: 112.55 toks/s]
+Processed prompts: 100%|██████████| 1/1 [00:09<00:00,  9.10s/it, est. speed input: 0.22 toks/s, output: 112.55 toks/s]
 [2026-02-08 20:43:08] INFO llm_inference.py:459: request_id=9133c43c-57ad-4c62-bc41-dba69235922a path=/api/v1/llm/generate status=200
 INFO:     127.0.0.1:58496 - "POST /api/v1/llm/generate HTTP/1.1" 200 OK
 INFO 02-08 20:46:32 [utils.py:261] non-default args: {'trust_remote_code': True, 'gpu_memory_utilization': 0.5, 'disable_log_stats': True, 'model': 'Qwen/Qwen2-0.5B-Instruct'}

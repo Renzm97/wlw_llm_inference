@@ -8,7 +8,7 @@
 </head>
 <body>
   <div class="main-container">
-    <!-- 左侧参数配置 -->
+    <!-- 右侧参数配置 -->
     <aside class="sidebar config-sidebar" id="config-sidebar">
       <h2>参数配置</h2>
       <div class="config-model-name-wrap" id="config-model-name-wrap">
@@ -17,7 +17,7 @@
       <form class="config-form" id="config-form">
         <div class="form-group">
           <label>模型引擎 <span class="required">*</span></label>
-          <select name="engine" required>
+          <select name="engine" required id="config-engine">
             <option value="ollama">Ollama</option>
             <option value="vllm">vLLM</option>
             <option value="sglang">SGLang</option>
@@ -25,24 +25,22 @@
         </div>
         <div class="form-group">
           <label>模型格式 <span class="required">*</span></label>
-          <select name="format" required>
+          <select name="format" required id="config-format">
             <option value="pytorch">PyTorch</option>
             <option value="safetensors">SafeTensors</option>
           </select>
         </div>
         <div class="form-group">
           <label>模型大小 <span class="required">*</span></label>
-          <select name="size" required>
+          <select name="size" required id="config-size">
             <option value="0.5B">0.5B</option>
             <option value="1B">1B</option>
             <option value="3B">3B</option>
-            <option value="7B">7B</option>
-            <option value="8B">8B</option>
           </select>
         </div>
         <div class="form-group">
           <label>量化 <span class="required">*</span></label>
-          <select name="quantization" required>
+          <select name="quantization" required id="config-quantization">
             <option value="none">无</option>
             <option value="int4">INT4</option>
             <option value="int8">INT8</option>
@@ -90,7 +88,7 @@
       </form>
     </aside>
 
-    <!-- 右侧主内容 -->
+    <!-- 左侧主内容 -->
     <main class="content">
       <!-- 启动模型 -->
       <section class="panel launch-panel">
@@ -132,6 +130,23 @@
             <tbody id="running-tbody"></tbody>
           </table>
           <div class="table-empty hidden" id="running-empty">暂无运行中的模型</div>
+        </div>
+      </section>
+
+      <!-- 运行日志 -->
+      <section class="panel log-panel">
+        <div class="panel-title-row">
+          <h2>运行日志</h2>
+          <div class="log-actions">
+            <label class="log-auto-refresh">
+              <input type="checkbox" id="log-auto-refresh" /> 自动刷新
+            </label>
+            <button type="button" class="btn btn-sm secondary" id="btn-refresh-logs" title="刷新日志">刷新</button>
+          </div>
+        </div>
+        <p class="log-hint">可查看近期启动/停止记录及引擎类型（Ollama、vLLM、SGLang）</p>
+        <div class="log-wrap">
+          <pre class="log-content" id="log-content">加载中…</pre>
         </div>
       </section>
     </main>
