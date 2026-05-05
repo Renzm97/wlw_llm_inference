@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
+import threading
 import time
-from typing import Optional
+from typing import Dict, Optional
 
 from fastapi import Request
 
@@ -27,6 +30,31 @@ from fastapi import APIRouter
 
 router = APIRouter(prefix="/api/v1/llm", tags=["llm"])
 
+# 缓存无 run_id 时创建的 inferencer，避免 vLLM 本地模式每次请求都重复加载模型
+# LRU 上限 10，防止内存/GPU 泄漏
+_inferencer_cache: Dict[str, LLMInferencer] = {}
+_inf_cache_lock = threading.Lock()
+_MAX_INF_CACHE = 10
+
+
+def _release_inferencer_gpu(inf: LLMInferencer) -> None:
+    """尝试释放 inferencer 持有的 GPU 资源。"""
+    try:
+        adapter = getattr(inf, "_adapter", None)
+        if adapter is not None:
+            llm = getattr(adapter, "_llm", None)
+            if llm is not None:
+                import gc
+                del adapter._llm
+                gc.collect()
+                try:
+                    import torch
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.debug("清理缓存 inferencer 失败: %s", e)
+
 
 def _resolve_inferencer(
     run_id: Optional[str],
@@ -41,7 +69,22 @@ def _resolve_inferencer(
         return inf
     if not engine_type:
         raise InvalidParameterError("请提供 run_id 或 engine_type")
-    return LLMInferencer(engine_type=engine_type, model_name=model_name)
+    cache_key = f"{engine_type}:{model_name}"
+    evicted: List[LLMInferencer] = []
+    with _inf_cache_lock:
+        cached = _inferencer_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        inf = LLMInferencer(engine_type=engine_type, model_name=model_name)
+        _inferencer_cache[cache_key] = inf
+        # 弹出最早插入的条目，在锁外释放 GPU
+        while len(_inferencer_cache) > _MAX_INF_CACHE:
+            key = next(iter(_inferencer_cache))
+            old = _inferencer_cache.pop(key)
+            evicted.append(old)
+    for old in evicted:
+        _release_inferencer_gpu(old)
+    return inf
 
 
 @router.post("/generate", response_model=ApiResponse)
@@ -58,11 +101,16 @@ async def api_generate(body: GenerateRequest, request: Request):
     )
     t0 = time.perf_counter()
     try:
-        response = inferencer.generate(
-            body.prompt,
-            temperature=body.temperature,
-            max_tokens=body.max_tokens,
-            top_p=body.top_p,
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            functools.partial(
+                inferencer.generate,
+                body.prompt,
+                temperature=body.temperature,
+                max_tokens=body.max_tokens,
+                top_p=body.top_p,
+            ),
         )
         cost = time.perf_counter() - t0
         return ApiResponse(
@@ -96,11 +144,16 @@ async def api_chat(body: ChatRequest, request: Request):
     )
     t0 = time.perf_counter()
     try:
-        response = inferencer.chat(
-            messages,
-            temperature=body.temperature,
-            max_tokens=body.max_tokens,
-            top_p=body.top_p,
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            functools.partial(
+                inferencer.chat,
+                messages,
+                temperature=body.temperature,
+                max_tokens=body.max_tokens,
+                top_p=body.top_p,
+            ),
         )
         cost = time.perf_counter() - t0
         return ApiResponse(
@@ -135,12 +188,17 @@ async def api_structured_generate(body: StructuredGenerateRequest, request: Requ
     )
     t0 = time.perf_counter()
     try:
-        result = inferencer.structured_generate(
-            body.prompt,
-            schema=body.response_schema,
-            temperature=body.temperature,
-            max_tokens=body.max_tokens,
-            top_p=body.top_p,
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            functools.partial(
+                inferencer.structured_generate,
+                body.prompt,
+                schema=body.response_schema,
+                temperature=body.temperature,
+                max_tokens=body.max_tokens,
+                top_p=body.top_p,
+            ),
         )
         cost = time.perf_counter() - t0
         return ApiResponse(

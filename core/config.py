@@ -26,12 +26,14 @@ def _load_config() -> Dict[str, Any]:
         "models_dir": "./models",
         "models_subdir_ollama": "ollama",
         "models_subdir_hf": "HF",
+        "model_source": "huggingface",  # 可选: "huggingface" | "modelscope"
         "hf_token": None,
+        "ms_token": None,
         "ollama": {"base_url": "http://localhost:11434"},
         "vllm": {
             "base_url": None,
             "local_model_path": None,
-            "model_aliases": {"llama3.2": "Qwen/Qwen2-0.5B-Instruct"},
+            "model_aliases": {},
             "gpu_memory_utilization": 0.65,
         },
         "sglang": {"base_url": "http://localhost:30000"},
@@ -44,6 +46,9 @@ def _load_config() -> Dict[str, Any]:
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             loaded = json.load(f)
+        if not isinstance(loaded, dict):
+            logger.warning("config.json 格式无效（期望字典），使用默认配置")
+            return default
         for key in default:
             if key not in loaded:
                 loaded[key] = default[key]
@@ -75,17 +80,30 @@ def _setup_models_dirs() -> None:
     os.makedirs(hf_path, exist_ok=True)
     os.environ["OLLAMA_MODELS"] = ollama_path
     os.environ["HUGGINGFACE_HUB_CACHE"] = hf_path
+    # ModelScope 缓存目录与 HF 保持一致，方便统一管理
+    os.environ["MODELSCOPE_CACHE"] = hf_path
     logger.info(
         "模型目录: 根目录=%s, Ollama=%s, HF=%s",
         models_base, ollama_path, hf_path,
     )
 
 
-def _setup_hf_token() -> None:
-    token = CONFIG.get("hf_token")
-    if token and isinstance(token, str) and token.strip():
-        os.environ["HF_TOKEN"] = token.strip()
-        logger.info("已从 config 设置 HF_TOKEN（用于 gated/私有模型）")
+def _setup_tokens() -> None:
+    model_source = CONFIG.get("model_source", "huggingface")
+    if model_source == "modelscope":
+        token = CONFIG.get("ms_token")
+        if not token:
+            token = os.environ.get("MODELSCOPE_API_TOKEN")
+        if token and isinstance(token, str) and token.strip():
+            os.environ["MODELSCOPE_API_TOKEN"] = token.strip()
+            logger.info("已设置 MODELSCOPE_API_TOKEN（用于 ModelScope 私有模型）")
+    else:
+        token = CONFIG.get("hf_token")
+        if not token:
+            token = os.environ.get("HF_TOKEN")
+        if token and isinstance(token, str) and token.strip():
+            os.environ["HF_TOKEN"] = token.strip()
+            logger.info("已设置 HF_TOKEN（用于 gated/私有模型）")
 
 
 def get_platform_models_dir() -> str:
@@ -106,7 +124,7 @@ def get_platform_hf_dir() -> str:
 
 # 导入时执行目录与 token 初始化
 _setup_models_dirs()
-_setup_hf_token()
+_setup_tokens()
 
 
 # ---------- 模型目录（models.json）----------
@@ -153,9 +171,11 @@ def get_model_variant(model_id: str, size: str) -> Optional[Dict[str, Any]]:
         "name": model.get("name", model_id),
         "size": variant.get("size"),
         "hf_repo": variant.get("hf_repo"),
+        "ms_repo": variant.get("ms_repo") or variant.get("hf_repo"),
         "ollama_name": variant.get("ollama_name") or model_id,
         "quantizations": model.get("quantizations") or ["none"],
-        "engines": model.get("engines") or ["ollama", "vllm", "sglang"],
+        "quantization_repos": variant.get("quantization_repos") or {},
+        "engines": model.get("engines") or ["vllm", "ollama", "sglang"],
         "official_url": model.get("official_url") or (f"https://huggingface.co/{variant.get('hf_repo', '')}" if variant.get("hf_repo") else None),
     }
 
@@ -164,55 +184,103 @@ def get_model_variant(model_id: str, size: str) -> Optional[Dict[str, Any]]:
 BUILTIN_MODELS: List[Dict[str, Any]] = []
 if not MODELS_CATALOG:
     BUILTIN_MODELS = [
-        {"id": "qwen2-0.5b", "name": "Qwen2 0.5B", "hf_repo": "Qwen/Qwen2-0.5B-Instruct", "official_url": "https://huggingface.co/Qwen/Qwen2-0.5B-Instruct", "quantizations": ["none"], "engines": ["ollama", "vllm", "sglang"], "ollama_name": "qwen2:0.5b"},
-        {"id": "llama3.2", "name": "Llama 3.2", "hf_repo": "meta-llama/Llama-3.2-1B-Instruct", "official_url": "https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct", "quantizations": ["none"], "engines": ["ollama", "vllm", "sglang"], "ollama_name": "llama3.2"},
+        {"id": "qwen2-0.5b", "name": "Qwen2 0.5B", "hf_repo": "Qwen/Qwen2-0.5B-Instruct", "ms_repo": "Qwen/Qwen2-0.5B-Instruct", "official_url": "https://huggingface.co/Qwen/Qwen2-0.5B-Instruct", "quantizations": ["none"], "engines": ["vllm", "ollama", "sglang"], "ollama_name": "qwen2:0.5b"},
+        {"id": "llama3.2", "name": "Llama 3.2", "hf_repo": "meta-llama/Llama-3.2-1B-Instruct", "ms_repo": "LLM-Research/Llama-3.2-1B-Instruct", "official_url": "https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct", "quantizations": ["none"], "engines": ["vllm", "ollama", "sglang"], "ollama_name": "llama3.2"},
     ]
-else:
-    # 从目录展开为扁平列表（每个 size 一条），兼容依赖 BUILTIN_MODELS 的代码
-    for m in MODELS_CATALOG:
-        for s in (m.get("sizes") or []):
-            BUILTIN_MODELS.append({
-                "id": f"{m['id']}-{s.get('size', '').replace('.', '-')}".strip("-"),
-                "name": f"{m.get('name', m['id'])} {s.get('size', '')}".strip(),
-                "hf_repo": s.get("hf_repo"),
-                "official_url": m.get("official_url"),
-                "quantizations": m.get("quantizations") or ["none"],
-                "engines": m.get("engines") or ["ollama", "vllm", "sglang"],
-                "ollama_name": s.get("ollama_name") or m.get("id"),
-            })
+# 当 MODELS_CATALOG 存在时，BUILTIN_MODELS 保持为空，避免 ID 命名空间冲突
+# 依赖 BUILTIN_MODELS 的代码应优先使用 get_model_variant() 或搜索 MODELS_CATALOG
 
 
-def ensure_model_downloaded(model_id: str, size: Optional[str] = None) -> str:
+def ensure_model_downloaded(model_id: str, size: Optional[str] = None, quantization: Optional[str] = None) -> str:
     """
-    确保模型已下载到平台模型目录，返回用于加载的 hf_repo。
-    若配置了 models.json，则用 model_id + size 解析 variant 再按 hf_repo 下载；
+    确保模型已下载到平台模型目录，返回本地绝对路径（供 vLLM/SGLang 直接加载）。
+    若配置了 models.json，则用 model_id + size 解析 variant 再按仓库名下载；
     否则按旧逻辑用 model_id 在 BUILTIN_MODELS 中查找。
+    当 quantization 非 none 且 models.json 中配置了 quantization_repos 时，
+    将下载对应的量化版模型并返回量化标识子目录。
+    下载源由 config.json 中的 model_source 控制（"huggingface" 或 "modelscope"）。
+    当 source 为 modelscope 时会优先使用 ms_repo，若未配置则回退到 hf_repo。
     """
     from core.exceptions import EngineNotInstalledError, ModelNotFoundError
 
     hf_repo: Optional[str] = None
+    ms_repo: Optional[str] = None
+
     if MODELS_CATALOG and size:
         variant = get_model_variant(model_id, size)
         if variant and variant.get("hf_repo"):
             hf_repo = variant["hf_repo"]
+            ms_repo = variant.get("ms_repo") or hf_repo
+            # 处理量化模型仓库映射（size 级别）
+            if quantization and quantization != "none":
+                q_repos = variant.get("quantization_repos") or {}
+                q_cfg = q_repos.get(quantization)
+                if q_cfg and q_cfg.get("hf_repo"):
+                    hf_repo = q_cfg["hf_repo"]
+                    ms_repo = q_cfg.get("ms_repo") or hf_repo
+                else:
+                    raise ModelNotFoundError(
+                        f"模型 {model_id} 的 {size} 版本未配置 {quantization} 量化模型仓库，"
+                        f"请在 models.json 对应 size 的 quantization_repos 中补充 hf_repo"
+                    )
     if not hf_repo and MODELS_CATALOG and not size:
         # 未传 size 时取该模型第一个 size
         model = next((m for m in MODELS_CATALOG if m.get("id") == model_id), None)
         if model and (model.get("sizes")):
             first = model["sizes"][0]
             hf_repo = first.get("hf_repo")
+            ms_repo = first.get("ms_repo") or hf_repo
+            if quantization and quantization != "none":
+                q_repos = first.get("quantization_repos") or {}
+                q_cfg = q_repos.get(quantization)
+                if q_cfg and q_cfg.get("hf_repo"):
+                    hf_repo = q_cfg["hf_repo"]
+                    ms_repo = q_cfg.get("ms_repo") or hf_repo
+                else:
+                    raise ModelNotFoundError(
+                        f"模型 {model_id} 未配置 {quantization} 量化模型仓库"
+                    )
     if not hf_repo:
         entry = next((m for m in BUILTIN_MODELS if m["id"] == model_id), None)
         if entry:
             hf_repo = entry.get("hf_repo")
+            ms_repo = entry.get("ms_repo") or hf_repo
     if not hf_repo:
         raise ModelNotFoundError(f"未知模型或未指定 size: model_id={model_id!r}, size={size!r}")
 
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError:
-        raise EngineNotInstalledError("请安装 huggingface_hub: pip install huggingface_hub")
-    cache_dir = get_platform_hf_dir()
-    os.makedirs(cache_dir, exist_ok=True)
-    snapshot_download(repo_id=hf_repo, cache_dir=cache_dir)
-    return hf_repo
+    # 防止路径遍历：model_id 来自用户输入，需过滤非法字符
+    if ".." in model_id or "/" in model_id or "\\" in model_id:
+        raise InvalidParameterError(f"model_id 包含非法字符: {model_id!r}")
+
+    model_source = CONFIG.get("model_source", "huggingface")
+    repo_id = ms_repo if model_source == "modelscope" else hf_repo
+
+    if model_source == "modelscope" and not ms_repo:
+        logger.warning("当前 model_source=modelscope，但模型 %s 未配置 ms_repo，将回退使用 hf_repo=%s", model_id, hf_repo)
+        repo_id = hf_repo
+
+    # 使用 model_id 作为本地扁平目录名；若指定了量化，则使用 model_id-quantization 子目录
+    local_dir_name = f"{model_id}-{quantization}" if (quantization and quantization != "none") else model_id
+    local_dir = os.path.join(get_platform_models_dir(), local_dir_name)
+    if os.path.isfile(os.path.join(local_dir, "config.json")):
+        logger.info("模型 %s 已存在于本地目录: %s", model_id, local_dir)
+        return local_dir
+    os.makedirs(local_dir, exist_ok=True)
+
+    local_path: str = ""
+    if model_source == "modelscope":
+        try:
+            from modelscope import snapshot_download
+        except ImportError:
+            raise EngineNotInstalledError("请安装 modelscope: pip install modelscope")
+        logger.info("使用 ModelScope 下载模型: %s -> %s", repo_id, local_dir)
+        local_path = snapshot_download(model_id=repo_id, local_dir=local_dir)
+    else:
+        # 默认 huggingface
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            raise EngineNotInstalledError("请安装 huggingface_hub: pip install huggingface_hub")
+        logger.info("使用 HuggingFace 下载模型: %s -> %s", repo_id, local_dir)
+        local_path = snapshot_download(repo_id=repo_id, local_dir=local_dir)
+    return local_path if local_path else local_dir

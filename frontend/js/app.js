@@ -1,8 +1,29 @@
 (function () {
   'use strict';
 
+  // Promise.prototype.finally polyfill for older browsers (Chrome < 63, Safari < 11.1)
+  if (!Promise.prototype.finally) {
+    Promise.prototype.finally = function (callback) {
+      var P = this.constructor;
+      return this.then(
+        function (value) { return P.resolve(callback()).then(function () { return value; }); },
+        function (reason) { return P.resolve(callback()).then(function () { throw reason; }); }
+      );
+    };
+  }
+
   // 嵌入模式：URL 参数 embed=1 或在 iframe 中时隐藏侧栏；api_base 可指定后端地址
-  const params = new URLSearchParams(window.location.search);
+  var params;
+  if (typeof URLSearchParams !== 'undefined') {
+    params = new URLSearchParams(window.location.search);
+  } else {
+    params = {
+      get: function (key) {
+        var m = window.location.search.match(new RegExp('[?&]' + key + '=([^&]+)'));
+        return m ? decodeURIComponent(m[1]) : null;
+      }
+    };
+  }
   const isEmbed = params.get('embed') === '1' || (window.self !== window.top);
   if (isEmbed) {
     document.body.classList.add('embed-mode');
@@ -11,27 +32,29 @@
 
   // 后端 GET /api/v1/models 返回后覆盖；每项可为 { id, name, description?, sizes, quantizations, engines, formats }
   let BUILTIN_LLM = [
-    { id: 'llama3.2', name: 'Llama 3.2', sizes: [{ size: '1B' }], quantizations: ['none'], engines: ['ollama', 'vllm', 'sglang'], formats: ['pytorch', 'safetensors'] },
-    { id: 'qwen2', name: 'Qwen2', sizes: [{ size: '0.5B' }], quantizations: ['none'], engines: ['ollama', 'vllm', 'sglang'], formats: ['pytorch', 'safetensors'] },
+    { id: 'llama3.2', name: 'Llama 3.2', sizes: [{ size: '1B' }], quantizations: ['none'], engines: ['vllm', 'ollama', 'sglang'], formats: ['pytorch', 'safetensors'] },
+    { id: 'qwen2', name: 'Qwen2', sizes: [{ size: '0.5B' }], quantizations: ['none'], engines: ['vllm', 'ollama', 'sglang'], formats: ['pytorch', 'safetensors'] },
   ];
 
-  const BUILTIN_EMBED = [
-    { id: 'bge', name: 'BGE' },
-    { id: 'gte', name: 'GTE' },
-  ];
+  // 嵌入模型后端尚未实现，暂不展示
+  const BUILTIN_EMBED = [];
 
   let state = {
     tab: 'llm',
     selectedModel: null,
     running: [],
-    nextRunningId: 1,
-    modelsLoaded: false,
-    inferenceRecord: null,
-    chatMessages: [],
     logAutoRefreshTimer: null,
   };
 
   var loadRunningAbortController = null;
+
+  // AbortController polyfill for older browsers (Safari < 15.4, etc.)
+  if (typeof AbortController === 'undefined') {
+    window.AbortController = function () {
+      this.signal = { aborted: false };
+      this.abort = function () { this.signal.aborted = true; };
+    };
+  }
 
   const $ = (sel, el = document) => el.querySelector(sel);
   const $$ = (sel, el = document) => el.querySelectorAll(sel);
@@ -49,7 +72,7 @@
       .map(function (m) {
         const desc = (isLlm && m.description) ? m.description : '模型简介，支持生成与对话。';
         const sizesLabel = (isLlm && m.sizes && m.sizes.length) ? m.sizes.map(function (s) { return s.size || s; }).join(' / ') : '';
-        const tags = sizesLabel ? sizesLabel + ' · generate model' : '4K · generate model';
+        const tags = sizesLabel ? sizesLabel + ' · generate model' : 'generate model';
         return '<div class="model-card" data-id="' + escapeHtml(m.id) + '" data-name="' + escapeHtml(m.name) + '">' +
           '<div class="name">' + escapeHtml(m.name) + '</div>' +
           '<div class="desc">' + escapeHtml(desc) + '</div>' +
@@ -89,6 +112,11 @@
     var nameEl = document.getElementById('config-model-name');
     if (nameEl) nameEl.textContent = '请选择模型';
     $$('.model-card').forEach((c) => c.classList.remove('selected'));
+    const form = $('#config-form');
+    if (form) {
+      delete form.dataset.modelId;
+      delete form.dataset.modelName;
+    }
   }
 
   function showConfigForm(model) {
@@ -101,6 +129,16 @@
     fillConfigOptionsFromModel(model);
   }
 
+  function _toggleParamVisibility(form, paramName, visible) {
+    var group = form.querySelector('[data-param="' + paramName + '"]');
+    if (!group) return;
+    if (visible) {
+      group.classList.remove('hidden');
+    } else {
+      group.classList.add('hidden');
+    }
+  }
+
   function fillConfigOptionsFromModel(model) {
     const form = $('#config-form');
     if (!form) return;
@@ -108,21 +146,29 @@
     var formatSel = form.querySelector('#config-format') || form.querySelector('[name="format"]');
     var sizeSel = form.querySelector('#config-size') || form.querySelector('[name="size"]');
     var quantSel = form.querySelector('#config-quantization') || form.querySelector('[name="quantization"]');
-    var engines = (model.engines && model.engines.length) ? model.engines : ['ollama', 'vllm', 'sglang'];
+    var engines = (model.engines && model.engines.length) ? model.engines : ['vllm', 'ollama', 'sglang'];
     var formats = (model.formats && model.formats.length) ? model.formats : ['pytorch', 'safetensors'];
     var sizes = (model.sizes && model.sizes.length) ? model.sizes : [{ size: '1B' }];
     var quants = (model.quantizations && model.quantizations.length) ? model.quantizations : ['none'];
+    var qRepos = model.quantization_repos || {};
     var engineLabels = { ollama: 'Ollama', vllm: 'vLLM', sglang: 'SGLang' };
     var formatLabels = { pytorch: 'PyTorch', safetensors: 'SafeTensors' };
     var quantLabels = { none: '无', int4: 'INT4', int8: 'INT8' };
+
     if (engineSel) {
       engineSel.innerHTML = engines.map(function (v) { return '<option value="' + v + '">' + (engineLabels[v] || v) + '</option>'; }).join('');
       engineSel.value = engines[0];
     }
+    // 模型引擎始终显示
+    _toggleParamVisibility(form, 'engine', true);
+
     if (formatSel) {
       formatSel.innerHTML = formats.map(function (v) { return '<option value="' + v + '">' + (formatLabels[v] || v) + '</option>'; }).join('');
       formatSel.value = formats[0];
     }
+    // 模型格式始终显示
+    _toggleParamVisibility(form, 'format', true);
+
     if (sizeSel) {
       sizeSel.innerHTML = sizes.map(function (s) {
         var sizeVal = typeof s === 'string' ? s : (s.size || s.hf_repo || '');
@@ -132,10 +178,24 @@
       var firstSize = sizes[0];
       sizeSel.value = firstSize ? (typeof firstSize === 'string' ? firstSize : (firstSize.size || '1B')) : '1B';
     }
+    // 模型大小始终显示（即使只有一个选项，也保留该参数供后续扩展）
+    _toggleParamVisibility(form, 'size', true);
+
     if (quantSel) {
-      quantSel.innerHTML = quants.map(function (v) { return '<option value="' + v + '">' + (quantLabels[v] || v) + '</option>'; }).join('');
+      quantSel.innerHTML = quants.map(function (v) {
+        var label = quantLabels[v] || v;
+        // 若声明了量化但 quantization_repos 中未配置对应仓库，标记为禁用
+        if (v !== 'none' && !qRepos[v]) {
+          label += '（未配置）';
+          return '<option value="' + v + '" disabled title="该模型的 ' + v + ' 量化版本尚未在 models.json 中配置 hf_repo">' + label + '</option>';
+        }
+        return '<option value="' + v + '">' + label + '</option>';
+      }).join('');
       quantSel.value = quants[0];
     }
+    // 量化始终显示（即使只有 none，也保留该参数供后续扩展）
+    _toggleParamVisibility(form, 'quantization', true);
+
     form.gpu_count.value = 'auto';
     form.replicas.value = '1';
     form.thought_mode.checked = true;
@@ -146,7 +206,7 @@
   function resetFormToDefault() {
     const form = $('#config-form');
     if (!form) return;
-    form.engine.value = 'ollama';
+    form.engine.value = 'vllm';
     form.format.value = 'pytorch';
     form.size.value = '1B';
     form.quantization.value = 'none';
@@ -273,6 +333,12 @@
           closeConfigPanel();
           renderRunningTable();
           loadLogsFromBackend();
+          if (address && typeof address === 'string' && address.startsWith('http')) {
+            var confirmed = confirm('模型已启动，是否在新标签页打开服务地址？\n' + address);
+            if (confirmed) {
+              window.open(address, '_blank');
+            }
+          }
           return data;
         });
       })
@@ -298,24 +364,38 @@
         .then(function (res) {
           return res.json();
         })
-        .then(function () {
-          state.running = state.running.filter(function (r) {
-            return r.id !== id;
-          });
-          renderRunningTable();
-          loadLogsFromBackend();
+        .then(function (data) {
+          if (data && data.code === 200) {
+            state.running = state.running.filter(function (r) {
+              return r.id !== id;
+            });
+            renderRunningTable();
+            loadLogsFromBackend();
+          } else {
+            alert('停止失败: ' + (data.msg || '未知错误'));
+          }
         })
-        .catch(function () {
-          state.running = state.running.filter(function (r) {
-            return r.id !== id;
-          });
-          renderRunningTable();
+        .catch(function (err) {
+          alert('停止请求失败: ' + (err.message || String(err)));
         });
     } else {
       state.running = state.running.filter(function (r) {
         return r.id !== id;
       });
       renderRunningTable();
+    }
+  }
+
+  function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function () {});
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
     }
   }
 
@@ -337,31 +417,47 @@
     if (wrap) wrap.classList.remove('table-wrap-empty');
     tbody.innerHTML = list
       .map(
-        (r) =>
-          `<tr>
+        (r) => {
+          var addrDisplay = r.address && r.address.startsWith('http')
+            ? '<a href="' + escapeHtml(r.address) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(r.address) + '</a>'
+            : escapeHtml(r.address);
+          var modelForTest = r.modelId || '';
+          if (r.engine === 'ollama' && r.name && r.name.includes('qwen')) {
+            modelForTest = 'qwen2:0.5b';
+          } else if (r.engine === 'ollama') {
+            modelForTest = r.name || r.modelId;
+          }
+          var testHref = '/test?address=' + encodeURIComponent(r.address) + '&engine=' + encodeURIComponent(r.engine) + '&model=' + encodeURIComponent(modelForTest);
+          return `<tr>
             <td class="run-id-cell">${r.id.length > 12 ? r.id.slice(0, 8) + '…' : r.id}</td>
-            <td>${r.name}</td>
-            <td>${r.address}</td>
-            <td>${r.engine}</td>
-            <td>${r.gpuIndex != null ? r.gpuIndex : 'auto'}</td>
-            <td>${r.quantization != null ? r.quantization : '-'}</td>
-            <td>${r.size != null ? r.size : '-'}</td>
-            <td>${r.replicas != null ? r.replicas : 1}</td>
+            <td>${escapeHtml(r.name)}</td>
+            <td>
+              ${addrDisplay}
+              <button type="button" class="btn btn-sm btn-copy" data-copy-address="${escapeHtml(r.address)}" title="复制地址">复制</button>
+              <a href="${testHref}" target="_blank" class="btn btn-sm btn-test">测试</a>
+            </td>
+            <td>${escapeHtml(r.engine)}</td>
+            <td>${escapeHtml(r.gpuIndex != null ? r.gpuIndex : 'auto')}</td>
+            <td>${escapeHtml(r.quantization != null ? r.quantization : '-')}</td>
+            <td>${escapeHtml(r.size != null ? r.size : '-')}</td>
+            <td>${escapeHtml(String(r.replicas != null ? r.replicas : 1))}</td>
             <td class="actions-cell">
-              <button type="button" class="btn btn-sm btn-primary btn-infer" data-run-index="${list.indexOf(r)}">推理</button>
               <button type="button" class="btn btn-sm btn-danger" data-stop-id="${r.id}">停止</button>
             </td>
-          </tr>`
+          </tr>`;
+        }
       )
       .join('');
 
     tbody.querySelectorAll('[data-stop-id]').forEach((btn) => {
       btn.addEventListener('click', () => stopRunning(btn.dataset.stopId));
     });
-    tbody.querySelectorAll('.btn-infer').forEach((btn) => {
-      const idx = parseInt(btn.dataset.runIndex, 10);
-      const record = list[idx];
-      if (record) btn.addEventListener('click', () => openInferenceDrawer(record));
+    tbody.querySelectorAll('.btn-copy').forEach((btn) => {
+      btn.addEventListener('click', function () {
+        copyToClipboard(btn.dataset.copyAddress);
+        btn.textContent = '已复制';
+        setTimeout(function () { btn.textContent = '复制'; }, 1500);
+      });
     });
   }
 
@@ -370,145 +466,6 @@
     $$('.tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
     renderModelCards();
     renderRunningTable();
-  }
-
-  function openInferenceDrawer(record) {
-    state.inferenceRecord = record;
-    state.chatMessages = [];
-    $('#inference-model-name').textContent = record.name + ' - 推理';
-    $('#inference-prompt').value = '';
-    $('#inference-result-generate').textContent = '';
-    $('#inference-result-chat').textContent = '';
-    $('#chat-messages').innerHTML = '';
-    $('#chat-input').value = '';
-    $('#inference-panel-generate').classList.remove('hidden');
-    $('#inference-panel-chat').classList.add('hidden');
-    $$('.inference-tab').forEach((t) => t.classList.toggle('active', t.dataset.inferenceTab === 'generate'));
-    $('#inference-backdrop').classList.add('open');
-    $('#inference-drawer').classList.add('open');
-  }
-
-  function closeInferenceDrawer() {
-    $('#inference-backdrop').classList.remove('open');
-    $('#inference-drawer').classList.remove('open');
-    state.inferenceRecord = null;
-    state.chatMessages = [];
-  }
-
-  function buildInferenceBody(record, promptOrMessages, temperature, maxTokens) {
-    const temperatureVal = parseFloat(temperature, 10) || 0.7;
-    const maxTokensVal = parseInt(maxTokens, 10) || 1024;
-    const base = { temperature: temperatureVal, max_tokens: maxTokensVal };
-    if (record.run_id) {
-      base.run_id = record.run_id;
-    } else {
-      base.engine_type = record.engine;
-      base.model_name = record.modelId;
-    }
-    return base;
-  }
-
-  function callGenerate() {
-    const record = state.inferenceRecord;
-    if (!record) return;
-    const prompt = $('#inference-prompt').value.trim();
-    if (!prompt) {
-      alert('请输入提示词');
-      return;
-    }
-    const temperature = $('#inference-temperature').value;
-    const maxTokens = $('#inference-max-tokens').value;
-    const body = buildInferenceBody(record, prompt, temperature, maxTokens);
-    body.prompt = prompt;
-
-    const resultEl = $('#inference-result-generate');
-    resultEl.textContent = '生成中...';
-    const btn = $('#btn-generate');
-    btn.disabled = true;
-
-    fetch(API_BASE + '/api/v1/llm/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then(function (res) {
-        return res.json();
-      })
-      .then(function (data) {
-        if (data.code !== 200 || !data.data) {
-          resultEl.textContent = '错误: ' + (data.msg || '生成失败');
-          return;
-        }
-        const text = data.data.response;
-        resultEl.textContent = typeof text === 'string' ? text : JSON.stringify(text);
-      })
-      .catch(function (err) {
-        resultEl.textContent = '请求失败: ' + (err.message || String(err));
-      })
-      .finally(function () {
-        btn.disabled = false;
-      });
-  }
-
-  function callChatSend() {
-    const record = state.inferenceRecord;
-    if (!record) return;
-    const input = $('#chat-input').value.trim();
-    if (!input) {
-      alert('请输入消息');
-      return;
-    }
-    state.chatMessages.push({ role: 'user', content: input });
-    $('#chat-input').value = '';
-    renderChatMessages();
-
-    const temperature = ($('#chat-temperature') && $('#chat-temperature').value) || '0.7';
-    const maxTokens = ($('#chat-max-tokens') && $('#chat-max-tokens').value) || '1024';
-    const body = buildInferenceBody(record, state.chatMessages, temperature, maxTokens);
-    body.messages = state.chatMessages.map(function (m) {
-      return { role: m.role, content: m.content };
-    });
-
-    const resultEl = $('#inference-result-chat');
-    resultEl.textContent = '回复中...';
-    const btn = $('#btn-chat-send');
-    btn.disabled = true;
-
-    fetch(API_BASE + '/api/v1/llm/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then(function (res) {
-        return res.json();
-      })
-      .then(function (data) {
-        if (data.code !== 200 || !data.data) {
-          resultEl.textContent = '错误: ' + (data.msg || '对话失败');
-          return;
-        }
-        const text = data.data.response;
-        const reply = typeof text === 'string' ? text : (text && text.content) || JSON.stringify(text);
-        state.chatMessages.push({ role: 'assistant', content: reply });
-        renderChatMessages();
-        resultEl.textContent = '';
-      })
-      .catch(function (err) {
-        resultEl.textContent = '请求失败: ' + (err.message || String(err));
-      })
-      .finally(function () {
-        btn.disabled = false;
-      });
-  }
-
-  function renderChatMessages() {
-    const container = $('#chat-messages');
-    container.innerHTML = state.chatMessages
-      .map(function (m) {
-        const cls = m.role === 'user' ? 'chat-msg-user' : 'chat-msg-assistant';
-        return '<div class="' + cls + '"><strong>' + m.role + '</strong>: ' + escapeHtml(m.content) + '</div>';
-      })
-      .join('');
   }
 
   function escapeHtml(s) {
@@ -584,11 +541,11 @@
               description: m.description || '',
               sizes: m.sizes || [],
               quantizations: m.quantizations || ['none'],
-              engines: m.engines || ['ollama', 'vllm', 'sglang'],
+              quantization_repos: m.quantization_repos || {},
+              engines: m.engines || ['vllm', 'ollama', 'sglang'],
               formats: m.formats || ['pytorch', 'safetensors'],
             };
           });
-          state.modelsLoaded = true;
         }
       })
       .catch(function () {})
@@ -623,7 +580,20 @@
       })
       .then(function (data) {
         if (data.code !== 200 || !data.data || !Array.isArray(data.data.running)) return;
-        state.running = data.data.running.map(mapBackendToRecord);
+        var backendIds = new Set();
+        var merged = data.data.running.map(mapBackendToRecord);
+        merged.forEach(function (r) { backendIds.add(r.id); });
+        // 保留前端本地已添加但后端尚未返回的实例（避免启动过程中闪烁消失）
+        // 仅保留最近 12 秒内前端本地添加的实例，防止已停止实例永久残留
+        var now = Date.now();
+        state.running.forEach(function (r) {
+          if (!backendIds.has(r.id)) {
+            if (r.addedAt && (now - r.addedAt < 12000)) {
+              merged.push(r);
+            }
+          }
+        });
+        state.running = merged;
         renderRunningTable();
       })
       .catch(function (err) {
@@ -636,6 +606,10 @@
   }
 
   function init() {
+    // 若嵌入模型未配置，隐藏嵌入相关 Tab
+    if (!BUILTIN_EMBED || BUILTIN_EMBED.length === 0) {
+      $$('.tabs .tab[data-tab="embed"]').forEach(function (el) { el.style.display = 'none'; });
+    }
     renderModelCards();
     renderRunningTable();
     loadModelsFromBackend();
@@ -646,15 +620,18 @@
       t.addEventListener('click', () => setTab(t.dataset.tab));
     });
 
-    $('#btn-refresh-running')?.addEventListener('click', function () {
+    var btnRefreshRunning = $('#btn-refresh-running');
+    if (btnRefreshRunning) btnRefreshRunning.addEventListener('click', function () {
       loadRunningFromBackend();
     });
 
-    $('#btn-refresh-logs')?.addEventListener('click', function () {
+    var btnRefreshLogs = $('#btn-refresh-logs');
+    if (btnRefreshLogs) btnRefreshLogs.addEventListener('click', function () {
       loadLogsFromBackend();
     });
 
-    $('#log-auto-refresh')?.addEventListener('change', function () {
+    var logAutoRefresh = $('#log-auto-refresh');
+    if (logAutoRefresh) logAutoRefresh.addEventListener('change', function () {
       if (state.logAutoRefreshTimer) {
         clearInterval(state.logAutoRefreshTimer);
         state.logAutoRefreshTimer = null;
@@ -663,23 +640,12 @@
         state.logAutoRefreshTimer = setInterval(loadLogsFromBackend, 3000);
       }
     });
-    $('#config-form')?.addEventListener('submit', onLaunch);
-    $('#btn-cancel')?.addEventListener('click', closeConfigPanel);
+    var configForm = $('#config-form');
+    if (configForm) configForm.addEventListener('submit', onLaunch);
+    var btnCancel = $('#btn-cancel');
+    if (btnCancel) btnCancel.addEventListener('click', closeConfigPanel);
 
-    $('#btn-close-inference')?.addEventListener('click', closeInferenceDrawer);
-    $('#inference-backdrop')?.addEventListener('click', closeInferenceDrawer);
-    $('#btn-generate')?.addEventListener('click', callGenerate);
-    $('#btn-chat-send')?.addEventListener('click', callChatSend);
-    $$('.inference-tab').forEach(function (t) {
-      t.addEventListener('click', function () {
-        const tab = t.dataset.inferenceTab;
-        $$('.inference-tab').forEach(function (x) {
-          x.classList.toggle('active', x.dataset.inferenceTab === tab);
-        });
-        $('#inference-panel-generate').classList.toggle('hidden', tab !== 'generate');
-        $('#inference-panel-chat').classList.toggle('hidden', tab !== 'chat');
-      });
-    });
+
   }
 
   init();

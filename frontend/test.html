@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>模型对话测试 - LLM 推理核心</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      line-height: 1.6;
+      overflow: hidden;
+    }
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* 顶部标题栏 */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    .header h1 {
+      font-size: 1.1rem;
+      color: #58a6ff;
+      font-weight: 600;
+    }
+    .header .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .header a {
+      color: #8b949e;
+      text-decoration: none;
+      font-size: 0.85rem;
+    }
+    .header a:hover { color: #58a6ff; }
+    .btn-sm {
+      padding: 6px 12px;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #c9d1d9;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    .btn-sm:hover { background: #30363d; }
+
+    /* 设置面板 */
+    .settings {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 0 20px;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.25s ease, padding 0.25s ease;
+    }
+    .settings.open {
+      max-height: 320px;
+      padding: 14px 20px;
+    }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .field label {
+      display: block;
+      font-size: 0.8rem;
+      color: #8b949e;
+      margin-bottom: 4px;
+    }
+    .field input, .field select {
+      width: 100%;
+      padding: 8px 10px;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #c9d1d9;
+      font-size: 0.9rem;
+      outline: none;
+    }
+    .field input:focus, .field select:focus { border-color: #58a6ff; }
+    .field-row {
+      display: flex;
+      gap: 12px;
+    }
+    .field-row .field { flex: 1; }
+
+    /* 消息区域 */
+    .chat-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .message {
+      display: flex;
+      max-width: 85%;
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .message.user { align-self: flex-end; }
+    .message.assistant { align-self: flex-start; }
+    .bubble {
+      padding: 12px 16px;
+      border-radius: 14px;
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .message.user .bubble {
+      background: #1E88E5;
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .message.assistant .bubble {
+      background: #21262d;
+      color: #c9d1d9;
+      border: 1px solid #30363d;
+      border-bottom-left-radius: 4px;
+    }
+    .bubble code {
+      background: rgba(0,0,0,0.25);
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.88em;
+    }
+    .bubble pre {
+      background: #0d1117;
+      padding: 12px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin-top: 8px;
+      border: 1px solid #30363d;
+    }
+    .bubble pre code {
+      background: transparent;
+      padding: 0;
+      font-size: 0.85em;
+    }
+    .bubble p { margin: 0 0 8px; }
+    .bubble p:last-child { margin-bottom: 0; }
+    .bubble strong { font-weight: 600; }
+
+    /* 思考中指示器 */
+    .typing {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      padding: 14px 16px;
+    }
+    .typing span {
+      width: 7px;
+      height: 7px;
+      background: #8b949e;
+      border-radius: 50%;
+      animation: bounce 1.2s infinite ease-in-out;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.15s; }
+    .typing span:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+      40% { transform: scale(1.2); opacity: 1; }
+    }
+
+    /* 底部输入区 */
+    .input-area {
+      padding: 12px 20px 20px;
+      background: #161b22;
+      border-top: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    .input-wrap {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 8px 12px;
+    }
+    .input-wrap:focus-within { border-color: #58a6ff; }
+    .input-wrap textarea {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: #c9d1d9;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      resize: none;
+      max-height: 160px;
+      min-height: 24px;
+      outline: none;
+      font-family: inherit;
+    }
+    .input-wrap textarea::placeholder { color: #6e7681; }
+    .btn-send {
+      padding: 8px 14px;
+      background: #1E88E5;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-send:hover { background: #388bfd; }
+    .btn-send:disabled { background: #30363d; cursor: not-allowed; }
+    .input-hint {
+      font-size: 0.75rem;
+      color: #6e7681;
+      margin-top: 6px;
+      text-align: center;
+    }
+
+    /* 空状态 */
+    .empty-state {
+      text-align: center;
+      color: #6e7681;
+      padding: 40px 20px;
+      align-self: center;
+    }
+    .empty-state h2 {
+      font-size: 1.3rem;
+      font-weight: 500;
+      margin-bottom: 8px;
+      color: #8b949e;
+    }
+    .empty-state p {
+      font-size: 0.9rem;
+      max-width: 400px;
+      margin: 0 auto;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #238636;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+      z-index: 1000;
+    }
+    .toast.show { opacity: 1; }
+
+    /* 错误提示 */
+    .error-toast {
+      background: #f85149;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <h1>🧪 模型对话测试</h1>
+      <div class="actions">
+        <button class="btn-sm" id="btn-toggle-settings">⚙️ 设置</button>
+        <button class="btn-sm" id="btn-clear">🗑️ 清空</button>
+        <a href="/">← 返回</a>
+      </div>
+    </div>
+
+    <div class="settings" id="settings-panel">
+      <div class="settings-grid">
+        <div class="field">
+          <label>引擎类型</label>
+          <select id="engine">
+            <option value="ollama">Ollama</option>
+            <option value="vllm">vLLM（OpenAI 格式）</option>
+            <option value="sglang">SGLang</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>模型服务地址</label>
+          <input type="text" id="address" placeholder="http://localhost:11434 或 local:run_id" />
+        </div>
+        <div class="field">
+          <label>模型名称</label>
+          <input type="text" id="model-name" placeholder="如 qwen2:0.5b" />
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>温度</label>
+            <input type="number" id="temperature" value="0.7" min="0" max="2" step="0.1" />
+          </div>
+          <div class="field">
+            <label>最大长度</label>
+            <input type="number" id="max-tokens" value="1024" min="1" />
+          </div>
+          <div class="field">
+            <label>Top P</label>
+            <input type="number" id="top-p" value="0.95" min="0" max="1" step="0.05" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-container" id="chat-container">
+      <div class="empty-state">
+        <h2>开始对话</h2>
+        <p>在下方输入框发送消息，后端将代理请求到目标模型服务。<br>点击「设置」可配置引擎、地址和模型参数。</p>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-wrap">
+        <textarea id="chat-input" rows="1" placeholder="输入消息，按 Enter 发送，Shift+Enter 换行..."></textarea>
+        <button class="btn-send" id="btn-send">发送</button>
+      </div>
+      <div class="input-hint">Enter 发送 · Shift+Enter 换行</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      // Promise.prototype.finally polyfill for older browsers
+      if (!Promise.prototype.finally) {
+        Promise.prototype.finally = function (callback) {
+          var P = this.constructor;
+          return this.then(
+            function (value) { return P.resolve(callback()).then(function () { return value; }); },
+            function (reason) { return P.resolve(callback()).then(function () { throw reason; }); }
+          );
+        };
+      }
+
+      var $ = function (id) { return document.getElementById(id); };
+      var container = $('chat-container');
+      var inputEl = $('chat-input');
+      var sendBtn = $('btn-send');
+      var settingsPanel = $('settings-panel');
+      var toastEl = $('toast');
+
+      var engineSel = $('engine');
+      var addressIn = $('address');
+      var modelNameIn = $('model-name');
+      var tempIn = $('temperature');
+      var maxTokensIn = $('max-tokens');
+      var topPIn = $('top-p');
+
+      // 支持 api_base URL 参数
+      var params;
+      if (typeof URLSearchParams !== 'undefined') {
+        params = new URLSearchParams(window.location.search);
+      } else {
+        params = {
+          get: function (key) {
+            var m = window.location.search.match(new RegExp('[?&]' + key + '=([^&]+)'));
+            return m ? decodeURIComponent(m[1]) : null;
+          }
+        };
+      }
+      var API_BASE = params.get('api_base') || '';
+
+      // 从 URL 参数预填充设置
+      if (params.get('address')) addressIn.value = params.get('address');
+      if (params.get('engine')) engineSel.value = params.get('engine');
+      if (params.get('model')) modelNameIn.value = params.get('model');
+
+      var messages = [];
+      var isSending = false;
+
+      function showToast(msg, isError) {
+        toastEl.textContent = msg;
+        toastEl.className = 'toast' + (isError ? ' error-toast show' : ' show');
+        setTimeout(function () { toastEl.className = 'toast'; }, 2500);
+      }
+
+      function escapeHtml(s) {
+        if (s == null) return '';
+        var div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+      }
+
+      // 简易 Markdown 渲染：先分割代码块，避免双重转义
+      function renderMarkdown(text) {
+        var parts = text.split(/(```[\s\S]*?```)/g);
+        return parts.map(function (part) {
+          if (part.startsWith('```')) {
+            var m = part.match(/```(\w+)?\n?([\s\S]*?)```/);
+            var code = m ? m[2].trim() : part;
+            return '<pre><code>' + escapeHtml(code) + '</code></pre>';
+          }
+          // 普通文本：转义后处理行内格式
+          var html = escapeHtml(part);
+          html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+          html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+          // 段落分割
+          var paragraphs = html.split(/\n{2,}/);
+          if (paragraphs.length > 1) {
+            return paragraphs.map(function (p) {
+              if (p.trim().indexOf('<pre>') === 0) return p;
+              return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
+            }).join('');
+          }
+          return html.replace(/\n/g, '<br>');
+        }).join('');
+      }
+
+      function appendMessage(role, text) {
+        // 移除空状态
+        if (container.querySelector('.empty-state')) {
+          container.innerHTML = '';
+        }
+        var msgEl = document.createElement('div');
+        msgEl.className = 'message ' + role;
+        var bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.innerHTML = renderMarkdown(text);
+        msgEl.appendChild(bubble);
+        container.appendChild(msgEl);
+        container.scrollTop = container.scrollHeight;
+      }
+
+      function appendTyping() {
+        if (container.querySelector('.empty-state')) {
+          container.innerHTML = '';
+        }
+        var msgEl = document.createElement('div');
+        msgEl.className = 'message assistant';
+        msgEl.id = 'typing-indicator';
+        var bubble = document.createElement('div');
+        bubble.className = 'bubble typing';
+        bubble.innerHTML = '<span></span><span></span><span></span>';
+        msgEl.appendChild(bubble);
+        container.appendChild(msgEl);
+        container.scrollTop = container.scrollHeight;
+      }
+
+      function removeTyping() {
+        var el = $('typing-indicator');
+        if (el) el.remove();
+      }
+
+      function clearChat() {
+        messages = [];
+        container.innerHTML = '<div class="empty-state"><h2>开始对话</h2><p>在下方输入框发送消息，后端将代理请求到目标模型服务。<br>点击「设置」可配置引擎、地址和模型参数。</p></div>';
+      }
+
+      function sendMessage() {
+        var text = inputEl.value.trim();
+        if (!text || isSending) return;
+
+        var engine = engineSel.value;
+        var address = addressIn.value.trim();
+        var model = modelNameIn.value.trim();
+        var temperature = parseFloat(tempIn.value) || 0.7;
+        var maxTokens = parseInt(maxTokensIn.value, 10) || 1024;
+        var topP = parseFloat(topPIn.value);
+        if (isNaN(topP)) topP = 0.95;
+
+        if (!address) { showToast('请填写模型服务地址（在设置中）', true); return; }
+        if (!model) { showToast('请填写模型名称（在设置中）', true); return; }
+
+        // 显示用户消息
+        messages.push({ role: 'user', content: text });
+        appendMessage('user', text);
+        inputEl.value = '';
+        inputEl.style.height = 'auto';
+
+        // 显示思考中
+        isSending = true;
+        sendBtn.disabled = true;
+        sendBtn.textContent = '请求中...';
+        appendTyping();
+
+        fetch(API_BASE + '/api/v1/test/proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            engine: engine,
+            address: address,
+            model: model,
+            prompt: text,
+            temperature: temperature,
+            max_tokens: maxTokens,
+            top_p: topP
+          })
+        })
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            removeTyping();
+            if (data.code !== 200 || !data.data) {
+              appendMessage('assistant', '❌ 错误：' + (data.msg || '请求失败'));
+              return;
+            }
+            var reply = data.data.response || '';
+            messages.push({ role: 'assistant', content: reply });
+            appendMessage('assistant', reply);
+          })
+          .catch(function (err) {
+            removeTyping();
+            appendMessage('assistant', '❌ 请求失败：' + (err.message || String(err)));
+          })
+          .finally(function () {
+            isSending = false;
+            sendBtn.disabled = false;
+            sendBtn.textContent = '发送';
+          });
+      }
+
+      // 事件绑定
+      sendBtn.addEventListener('click', sendMessage);
+      inputEl.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+      // textarea 自动增高
+      inputEl.addEventListener('input', function () {
+        this.style.height = 'auto';
+        this.style.height = Math.min(160, this.scrollHeight) + 'px';
+      });
+
+      $('btn-toggle-settings').addEventListener('click', function () {
+        settingsPanel.classList.toggle('open');
+      });
+      $('btn-clear').addEventListener('click', function () {
+        if (confirm('确定要清空当前对话吗？')) {
+          clearChat();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

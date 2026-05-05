@@ -4,15 +4,15 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import queue
 import threading
-import uuid
-from typing import Any, List
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from api.schemas import ApiResponse, StartModelRequest
 from core import BUILTIN_MODELS, get_models_catalog
@@ -35,6 +35,16 @@ logger = logging.getLogger("api.routes.models")
 router = APIRouter(prefix="/api/v1/models", tags=["models"])
 
 
+def _merge_quantization_repos(sizes: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """从所有 size 的 quantization_repos 中提取并集。"""
+    merged: Dict[str, Any] = {}
+    for s in sizes:
+        for k, v in (s.get("quantization_repos") or {}).items():
+            if k not in merged:
+                merged[k] = v
+    return merged
+
+
 @router.get("", response_model=ApiResponse)
 async def api_list_models(request: Request):
     """
@@ -53,7 +63,8 @@ async def api_list_models(request: Request):
                 "official_url": m.get("official_url"),
                 "sizes": m.get("sizes", []),
                 "quantizations": m.get("quantizations", ["none"]),
-                "engines": m.get("engines", ["ollama", "vllm", "sglang"]),
+                "quantization_repos": _merge_quantization_repos(m.get("sizes", [])),
+                "engines": m.get("engines", ["vllm", "ollama", "sglang"]),
                 "formats": m.get("formats", ["pytorch", "safetensors"]),
             }
             for m in catalog
@@ -66,7 +77,7 @@ async def api_list_models(request: Request):
                 "official_url": m.get("official_url"),
                 "quantizations": m.get("quantizations", []),
                 "engines": m.get("engines", []),
-                "sizes": [{"size": m.get("size", "1B"), "hf_repo": m.get("hf_repo"), "ollama_name": m.get("ollama_name")}],
+                "sizes": [{"size": m.get("size", "1B"), "hf_repo": m.get("hf_repo"), "ms_repo": m.get("ms_repo"), "ollama_name": m.get("ollama_name")}],
                 "formats": ["pytorch", "safetensors"],
             }
             for m in BUILTIN_MODELS
@@ -76,29 +87,33 @@ async def api_list_models(request: Request):
 
 @router.post("/start", response_model=ApiResponse)
 async def api_start_model(body: StartModelRequest, request: Request):
-    """根据前端命令启动 ollama/vllm/sglang 对应模型，返回 run_id 与可访问地址。"""
+    """根据前端命令启动 ollama/vllm/sglang 对应模型，返回 run_id 与可访问地址。
+    同步阻塞的启动过程（模型下载、加载）会放入线程池执行，避免阻塞事件循环。"""
     rid = request.state.request_id
-    api_base_url = str(request.base_url).rstrip("/")
     try:
-        run_id, address = start_model_impl(
-            model_id=body.model_id,
-            engine_type=body.engine_type,
-            api_base_url=api_base_url,
-            format=body.format,
-            size=body.size,
-            quantization=body.quantization,
-            gpu_count=body.gpu_count,
-            replicas=body.replicas,
-            thought_mode=body.thought_mode,
-            parse_inference=body.parse_inference,
+        loop = asyncio.get_event_loop()
+        run_id, address = await loop.run_in_executor(
+            None,
+            functools.partial(
+                start_model_impl,
+                model_id=body.model_id,
+                engine_type=body.engine_type,
+                format=body.format,
+                size=body.size,
+                quantization=body.quantization,
+                gpu_count=body.gpu_count,
+                replicas=body.replicas,
+                thought_mode=body.thought_mode,
+                parse_inference=body.parse_inference,
+            ),
         )
         return ApiResponse(
             request_id=rid,
             code=200,
             msg="success",
-            data={"uid": run_id, "run_id": run_id, "address": address},
+            data={"run_id": run_id, "address": address},
         )
-    except (ModelNotFoundError, InvalidParameterError, EngineNotInstalledError):
+    except (ModelNotFoundError, InvalidParameterError, EngineNotInstalledError, EngineNotRunningError):
         raise
     except (ValueError, RuntimeError) as e:
         friendly = user_facing_start_error(e)
@@ -114,11 +129,13 @@ async def api_start_model(body: StartModelRequest, request: Request):
 @router.post("/start-stream")
 async def api_start_model_stream(body: StartModelRequest, request: Request):
     """流式启动模型：返回 NDJSON 流。"""
-    api_base_url = str(request.base_url).rstrip("/")
     progress_queue: queue.Queue = queue.Queue()
     result_holder: List[Any] = []
+    cancel_event = threading.Event()
 
     def progress_callback(percent: int, message: str) -> None:
+        if cancel_event.is_set():
+            raise RuntimeError("启动已被客户端取消")
         progress_queue.put({"progress": percent, "message": message})
 
     def run_start() -> None:
@@ -126,8 +143,8 @@ async def api_start_model_stream(body: StartModelRequest, request: Request):
             run_id, address = start_model_impl(
                 model_id=body.model_id,
                 engine_type=body.engine_type,
-                api_base_url=api_base_url,
                 progress_callback=progress_callback,
+                cancel_event=cancel_event,
                 format=body.format,
                 size=body.size,
                 quantization=body.quantization,
@@ -137,6 +154,13 @@ async def api_start_model_stream(body: StartModelRequest, request: Request):
                 parse_inference=body.parse_inference,
             )
             result_holder.append(("ok", run_id, address))
+        except RuntimeError as e:
+            if "取消" in str(e):
+                logger.info("启动任务因客户端断开而取消")
+                result_holder.append(("err", "已取消"))
+            else:
+                logger.exception("启动模型流式异常: %s", e)
+                result_holder.append(("err", user_facing_start_error(e)))
         except Exception as e:
             logger.exception("启动模型流式异常: %s", e)
             result_holder.append(("err", user_facing_start_error(e)))
@@ -145,24 +169,40 @@ async def api_start_model_stream(body: StartModelRequest, request: Request):
     thread.start()
 
     async def ndjson_stream():
-        while True:
-            while not progress_queue.empty():
-                try:
-                    item = progress_queue.get_nowait()
-                    yield json.dumps(item, ensure_ascii=False) + "\n"
-                except queue.Empty:
-                    break
-            if result_holder:
-                status = result_holder[0]
-                if status[0] == "ok":
-                    yield json.dumps(
-                        {"progress": 100, "run_id": status[1], "address": status[2]},
-                        ensure_ascii=False,
-                    ) + "\n"
-                else:
-                    yield json.dumps({"progress": 0, "error": status[1]}, ensure_ascii=False) + "\n"
-                return
-            await asyncio.sleep(0.12)
+        start_ts = asyncio.get_event_loop().time()
+        try:
+            while True:
+                # 客户端断开时主动终止
+                if await request.is_disconnected():
+                    logger.info("流式启动客户端已断开，终止后台任务")
+                    cancel_event.set()
+                    return
+                while not progress_queue.empty():
+                    try:
+                        item = progress_queue.get_nowait()
+                        yield json.dumps(item, ensure_ascii=False) + "\n"
+                    except queue.Empty:
+                        break
+                if result_holder:
+                    status = result_holder[0]
+                    if status[0] == "ok":
+                        yield json.dumps(
+                            {"progress": 100, "run_id": status[1], "address": status[2]},
+                            ensure_ascii=False,
+                        ) + "\n"
+                    else:
+                        yield json.dumps({"progress": 0, "error": status[1]}, ensure_ascii=False) + "\n"
+                    return
+                # 整体超时保护（30 分钟），防止线程崩溃导致无限循环
+                if asyncio.get_event_loop().time() - start_ts > 1800:
+                    cancel_event.set()
+                    yield json.dumps({"progress": 0, "error": "启动超时（超过30分钟）"}, ensure_ascii=False) + "\n"
+                    return
+                await asyncio.sleep(0.12)
+        except asyncio.CancelledError:
+            logger.info("流式启动连接被取消")
+            cancel_event.set()
+            raise
 
     return StreamingResponse(
         ndjson_stream(),

@@ -30,6 +30,7 @@ class LLMInferencer:
         vllm_base_url: Optional[str] = None,
         vllm_local_model_path: Optional[str] = None,
         vllm_gpu_memory_utilization: Optional[float] = None,
+        vllm_quantization: Optional[str] = None,
         sglang_base_url: Optional[str] = None,
     ):
         if engine_type not in self.ENGINE_MAP:
@@ -44,7 +45,12 @@ class LLMInferencer:
             vllm_cfg = CONFIG.get("vllm") or {}
             url = vllm_base_url if vllm_base_url is not None else vllm_cfg.get("base_url")
             path = vllm_local_model_path if vllm_local_model_path is not None else vllm_cfg.get("local_model_path")
-            self._adapter = adapter_cls(base_url=url, local_model_path=path, gpu_memory_utilization=vllm_gpu_memory_utilization)
+            self._adapter = adapter_cls(
+                base_url=url,
+                local_model_path=path,
+                gpu_memory_utilization=vllm_gpu_memory_utilization,
+                quantization=vllm_quantization,
+            )
         else:
             url = sglang_base_url or (CONFIG.get("sglang") or {}).get("base_url", "http://localhost:30000")
             self._adapter = adapter_cls(base_url=url)
@@ -64,13 +70,11 @@ class LLMInferencer:
     def generate(self, prompt: str, *, model_name: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 1024, top_p: float = 0.95, **kwargs: Any) -> str:
         self._validate_common(temperature=temperature, max_tokens=max_tokens, top_p=top_p)
         model = model_name or self.model_name
-        self._adapter.check_service(model)
         return self._adapter.generate(prompt, model_name=model, temperature=temperature, max_tokens=max_tokens, top_p=top_p, **kwargs)
 
     def chat(self, messages: List[Dict[str, str]], *, model_name: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 1024, top_p: float = 0.95, **kwargs: Any) -> str:
         self._validate_common(temperature=temperature, max_tokens=max_tokens, top_p=top_p)
         model = model_name or self.model_name
-        self._adapter.check_service(model)
         return self._adapter.chat(messages, model_name=model, temperature=temperature, max_tokens=max_tokens, top_p=top_p, **kwargs)
 
     def structured_generate(self, prompt: str, schema: Optional[Dict[str, Any]] = None, *, model_name: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 1024, top_p: float = 0.95, **kwargs: Any) -> Union[Dict[str, Any], str]:
@@ -78,7 +82,6 @@ class LLMInferencer:
             raise StructuredOutputNotSupportedError("structured_generate 仅支持 SGLang")
         self._validate_common(temperature=temperature, max_tokens=max_tokens, top_p=top_p)
         model = model_name or self.model_name
-        self._adapter.check_service(model)
         return self._adapter.structured_generate(prompt, schema, model_name=model, temperature=temperature, max_tokens=max_tokens, top_p=top_p, **kwargs)
 
 

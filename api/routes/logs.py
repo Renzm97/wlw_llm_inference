@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 from fastapi import APIRouter, Request
 
 from api.schemas import ApiResponse
@@ -12,7 +14,11 @@ router = APIRouter(prefix="/api/v1", tags=["logs"])
 
 
 @router.get("/logs")
-async def api_get_logs(request: Request, limit: int = 200, level: str | None = None):
+async def api_get_logs(request: Request, limit: int = 200, level: Optional[str] = None):
+    if limit < 1:
+        limit = 1
+    if limit > 500:
+        limit = 500
     """
     返回近期运行日志（启动/停止模型、引擎类型等），便于确认当前是 Ollama 还是 vLLM 等。
     limit: 最多返回条数，默认 200；level: 可选 DEBUG/INFO/WARNING/ERROR 过滤。

@@ -33,8 +33,12 @@ pip install pydantic fastapi uvicorn requests httpx
 | `default_model_name` | 默认模型名（如 `llama3.2`），创建推理实例时未传 `model_name` 时使用 |
 | `models_dir` | 模型统一存储根目录（相对项目根或绝对路径），默认 `./models` |
 | `models_subdir_ollama` | Ollama 模型子目录名，默认 `ollama`，实际路径为 `models_dir/ollama` |
-| `models_subdir_hf` | Hugging Face 缓存子目录名，默认 `HF`，实际路径为 `models_dir/HF` |
-| `hf_token` | Hugging Face 令牌（用于 gated/私有模型）。填写后程序会设置 `HF_TOKEN` 环境变量；不填则使用环境已有 `HF_TOKEN` 或 `huggingface-cli login` 的登录态。请勿提交含真实 token 的 config 到版本库 |
+| `models_subdir_hf` | Hugging Face / ModelScope 缓存子目录名，默认 `HF`，实际路径为 `models_dir/HF` |
+| `model_source` | 模型下载来源，可选 `"huggingface"`（默认）或 `"modelscope"`。设为 `"modelscope"` 时，vLLM/SGLang 启动会从 ModelScope（https://www.modelscope.cn）下载模型，避免 HuggingFace 网络不可达问题 |
+| `hf_token` | Hugging Face 令牌（用于 gated/私有模型）。当 `model_source` 为 `"huggingface"` 时生效。填写后程序会设置 `HF_TOKEN` 环境变量；不填则使用环境已有 `HF_TOKEN` 或 `huggingface-cli login` 的登录态 |
+| `ms_token` | ModelScope 令牌（用于私有模型）。当 `model_source` 为 `"modelscope"` 时生效。填写后程序会设置 `MODELSCOPE_API_TOKEN` 环境变量 |
+
+> **安全提示**：`hf_token`、`ms_token` 均为敏感信息，请勿提交含真实 token 的 `config.json` 到版本库
 | `ollama.base_url` | Ollama 服务地址，默认 `http://localhost:11434` |
 | `vllm.base_url` | vLLM 远程 API 地址；为 null 时使用本地加载 |
 | `vllm.local_model_path` | vLLM **本地模型目录**（需为 **Hugging Face 格式**：含 `config.json`、tokenizer 等）。支持 `~` 表示家目录 |
@@ -43,10 +47,10 @@ pip install pydantic fastapi uvicorn requests httpx
 | `sglang.base_url` | SGLang 服务地址，默认 `http://localhost:30000` |
 
 **关于「模型统一存储目录」：**  
-程序启动时会根据 `models_dir`、`models_subdir_ollama`、`models_subdir_hf` 在项目下创建目录，并设置 `OLLAMA_MODELS` 与 `HUGGINGFACE_HUB_CACHE`，使 Ollama 与 HF 下载的模型统一存到项目 `models/ollama`、`models/HF`（子目录名可在配置中修改）。若需 Ollama 使用该目录，请在本项目环境下启动 Ollama（或设置 `OLLAMA_MODELS` 后执行 `ollama pull`）；HF 模型在首次加载时会自动下载到 `models/HF`。
+程序启动时会根据 `models_dir`、`models_subdir_ollama`、`models_subdir_hf` 在项目下创建目录，并设置 `OLLAMA_MODELS`、`HUGGINGFACE_HUB_CACHE` 与 `MODELSCOPE_CACHE`，使 Ollama、HF 与 ModelScope 下载的模型统一存到项目 `models/ollama`、`models/HF`（子目录名可在配置中修改）。若需 Ollama 使用该目录，请在本项目环境下启动 Ollama（或设置 `OLLAMA_MODELS` 后执行 `ollama pull`）；HF/ModelScope 模型在首次加载时会自动下载到 `models/HF`。
 
 **关于「用 Ollama 拉取的模型路径」：**  
-Ollama 拉取后的模型是其**自有格式**，不是 Hugging Face 的目录结构，**不能**直接作为 vLLM 的 `local_model_path`。若要用 vLLM 跑本地模型，需使用 **HF 格式** 的模型目录（可从 Hugging Face 下载或另存为 HF 格式），把该目录路径填到 `vllm.local_model_path` 或 `vllm.model_aliases` 中即可。
+Ollama 拉取后的模型是其**自有格式**，不是 Hugging Face 的目录结构，**不能**直接作为 vLLM 的 `local_model_path`。若要用 vLLM 跑本地模型，需使用 **HF 格式** 的模型目录（可从 Hugging Face 或 ModelScope 下载），把该目录路径填到 `vllm.local_model_path` 或 `vllm.model_aliases` 中即可。
 
 **模型目录（models.json）：**  
 项目根目录下的 **`models.json`** 用于配置首页展示的**多模型**及每个模型可选的**大小、引擎、量化、格式**，前端参数配置会根据该文件动态显示选项，启动时按「模型 + 大小」解析出对应的 Hugging Face repo 或 Ollama 名称并下载/拉取。

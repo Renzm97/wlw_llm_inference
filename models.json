@@ -2,29 +2,45 @@
   "models": [
     {
       "id": "qwen2",
-      "name": "Qwen2",
+      "name": "千问2",
       "description": "通义千问 Qwen2 系列，支持多尺寸与量化。",
       "official_url": "https://huggingface.co/Qwen",
       "sizes": [
-        { "size": "0.5B", "hf_repo": "Qwen/Qwen2-0.5B-Instruct", "ollama_name": "qwen2:0.5b" },
-        { "size": "1.5B", "hf_repo": "Qwen/Qwen2-1.5B-Instruct", "ollama_name": "qwen2:1.5b" },
-        { "size": "7B", "hf_repo": "Qwen/Qwen2-7B-Instruct", "ollama_name": "qwen2:7b" }
+        {
+          "size": "0.5B",
+          "hf_repo": "Qwen/Qwen2-0.5B-Instruct",
+          "ms_repo": "Qwen/Qwen2-0.5B-Instruct",
+          "ollama_name": "qwen2:0.5b",
+          "quantization_repos": {
+            "int4": { "hf_repo": "Qwen/Qwen2-0.5B-Instruct-GPTQ-Int4", "quantization": "gptq" },
+            "int8": { "hf_repo": "Qwen/Qwen2-0.5B-Instruct-AWQ", "quantization": "awq" }
+          }
+        },
+        {
+          "size": "1.5B",
+          "hf_repo": "Qwen/Qwen2-1.5B-Instruct",
+          "ms_repo": "Qwen/Qwen2-1.5B-Instruct",
+          "ollama_name": "qwen2:1.5b",
+          "quantization_repos": {
+            "int4": { "hf_repo": "Qwen/Qwen2-1.5B-Instruct-GPTQ-Int4", "quantization": "gptq" },
+            "int8": { "hf_repo": "Qwen/Qwen2-1.5B-Instruct-AWQ", "quantization": "awq" }
+          }
+        }
       ],
       "quantizations": ["none", "int4", "int8"],
-      "engines": ["ollama", "vllm", "sglang"],
+      "engines": ["vllm", "ollama", "sglang"],
       "formats": ["pytorch", "safetensors"]
     },
     {
       "id": "llama3.2",
-      "name": "Llama 3.2",
-      "description": "Meta Llama 3.2 系列。",
+      "name": "Llama",
+      "description": "Meta Llama 系列。",
       "official_url": "https://huggingface.co/meta-llama",
       "sizes": [
-        { "size": "1B", "hf_repo": "meta-llama/Llama-3.2-1B-Instruct", "ollama_name": "llama3.2" },
-        { "size": "3B", "hf_repo": "meta-llama/Llama-3.2-3B-Instruct", "ollama_name": "llama3.2:3b" }
+        { "size": "1B", "hf_repo": "meta-llama/Llama-3.2-1B-Instruct", "ms_repo": "LLM-Research/Llama-3.2-1B-Instruct", "ollama_name": "llama3.2", "quantization_repos": {} }
       ],
-      "quantizations": ["none", "int4"],
-      "engines": ["ollama", "vllm", "sglang"],
+      "quantizations": ["none"],
+      "engines": ["vllm", "ollama", "sglang"],
       "formats": ["pytorch", "safetensors"]
     }
   ]

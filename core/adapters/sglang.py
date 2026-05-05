@@ -12,13 +12,10 @@ import httpx
 from core.adapters.base import BaseLLMAdapter
 from core.exceptions import EngineNotInstalledError, EngineNotRunningError
 
+SGLANG_AVAILABLE = True
 try:
-    import sglang
-    from sglang import Engine
-    SGLANG_AVAILABLE = True
+    import sglang  # noqa: F401
 except ImportError:
-    sglang = None
-    Engine = None
     SGLANG_AVAILABLE = False
 
 logger = logging.getLogger("core.adapters.sglang")
@@ -34,11 +31,15 @@ class SGLangAdapter(BaseLLMAdapter):
         return "sglang"
 
     def is_available(self) -> bool:
+        if self.base_url:
+            try:
+                with httpx.Client(timeout=2.0) as c:
+                    return c.get(f"{self.base_url}/get_model_info").status_code == 200
+            except Exception:
+                return False
         return SGLANG_AVAILABLE
 
     def check_service(self, model_name: str) -> None:
-        if not SGLANG_AVAILABLE:
-            raise EngineNotInstalledError("未安装 sglang")
         try:
             with httpx.Client(timeout=5.0) as c:
                 if c.get(f"{self.base_url}/get_model_info").status_code != 200:
@@ -61,15 +62,30 @@ class SGLangAdapter(BaseLLMAdapter):
         return self.generate("\n".join(parts), model_name=model_name, temperature=temperature, max_tokens=max_tokens, top_p=top_p, **kwargs)
 
     def structured_generate(self, prompt: str, schema: Optional[Dict[str, Any]] = None, *, model_name: str, temperature: float = 0.7, max_tokens: int = 1024, top_p: float = 0.95, **kwargs: Any) -> Union[Dict[str, Any], str]:
-        self.check_service(model_name)
         schema_hint = f"\n请严格按以下 JSON 结构返回：\n{json.dumps(schema, ensure_ascii=False)}\n" if schema else ""
         full_prompt = f"{prompt}{schema_hint}\n请只输出合法 JSON，不要其他文字。"
         raw = self.generate(full_prompt, model_name=model_name, temperature=max(0.1, temperature), max_tokens=max_tokens, top_p=top_p, **kwargs)
         try:
             raw = raw.strip()
-            start, end = raw.find("{"), raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                raw = raw[start:end]
-            return json.loads(raw)
+            # 尝试查找 JSON 代码块
+            if "```json" in raw:
+                block_start = raw.find("```json") + len("```json")
+                block_end = raw.find("```", block_start)
+                if block_end > block_start:
+                    raw = raw[block_start:block_end].strip()
+            elif "```" in raw:
+                block_start = raw.find("```") + 3
+                block_end = raw.find("```", block_start)
+                if block_end > block_start:
+                    raw = raw[block_start:block_end].strip()
+            # 尝试解析整个文本，失败则回退到首尾大括号查找
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                start, end = raw.find("{"), raw.rfind("}") + 1
+                if start >= 0 and end > start:
+                    return json.loads(raw[start:end])
+                raise
         except json.JSONDecodeError:
-            return {"raw": raw}
+            logger.warning("SGLang 结构化输出 JSON 解析失败，返回原始文本")
+            return {"parse_error": True, "raw": raw}

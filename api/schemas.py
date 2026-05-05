@@ -10,10 +10,10 @@ from pydantic import BaseModel, Field
 
 class GenerateRequest(BaseModel):
     """单轮推理请求体。run_id 与 (engine_type, model_name) 二选一。"""
-    prompt: str = Field(..., min_length=1, description="输入提示词")
+    prompt: str = Field(..., min_length=1, max_length=500000, description="输入提示词")
     run_id: Optional[str] = Field(default=None, description="已启动模型的 run_id，与 engine_type/model_name 二选一")
     engine_type: Optional[Literal["ollama", "vllm", "sglang"]] = Field(default=None, description="引擎类型")
-    model_name: str = Field(default="llama3.2", min_length=1)
+    model_name: str = Field(default="llama3.2", min_length=1, max_length=256)
     temperature: float = Field(default=0.7, ge=0, le=2)
     max_tokens: int = Field(default=1024, gt=0)
     top_p: float = Field(default=0.95, ge=0, le=1)
@@ -26,10 +26,10 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     """多轮对话请求体。run_id 与 (engine_type, model_name) 二选一。"""
-    messages: List[ChatMessage] = Field(..., min_length=1)
+    messages: List[ChatMessage] = Field(..., min_length=1, max_length=200)
     run_id: Optional[str] = Field(default=None, description="已启动模型的 run_id")
     engine_type: Optional[Literal["ollama", "vllm", "sglang"]] = Field(default=None)
-    model_name: str = Field(default="llama3.2", min_length=1)
+    model_name: str = Field(default="llama3.2", min_length=1, max_length=256)
     temperature: float = Field(default=0.7, ge=0, le=2)
     max_tokens: int = Field(default=1024, gt=0)
     top_p: float = Field(default=0.95, ge=0, le=1)
@@ -37,7 +37,7 @@ class ChatRequest(BaseModel):
 
 class StructuredGenerateRequest(BaseModel):
     """结构化输出请求体（仅 SGLang）。run_id 与 (engine_type, model_name) 二选一。"""
-    prompt: str = Field(..., min_length=1)
+    prompt: str = Field(..., min_length=1, max_length=500000)
     run_id: Optional[str] = Field(default=None, description="已启动模型的 run_id")
     engine_type: Optional[Literal["sglang"]] = Field(default=None)
     model_name: str = Field(default="llama3.2", min_length=1)
@@ -61,6 +61,17 @@ class ApiResponse(BaseModel):
     code: int
     msg: str
     data: Optional[Union[SuccessData, Dict[str, Any]]] = None
+
+
+class TestProxyRequest(BaseModel):
+    """测试页代理请求体：由后端代为向模型引擎发送推理请求。"""
+    engine: Literal["ollama", "vllm", "sglang"] = Field(..., description="引擎类型")
+    address: str = Field(..., min_length=1, description="模型服务地址（如 http://localhost:11434 或 local:run_id）")
+    model: str = Field(..., min_length=1, description="模型名称")
+    prompt: str = Field(..., min_length=1, max_length=500000, description="输入提示词")
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    max_tokens: int = Field(default=1024, gt=0)
+    top_p: float = Field(default=0.95, ge=0, le=1)
 
 
 class StartModelRequest(BaseModel):

@@ -22,3 +22,9 @@ httpx>=0.25.0
 # ---------- SGLang 引擎（可选，使用 SGLang 时安装） ----------
 # sglang[all]>=0.1.0
 # 注意：SGLang 依赖 CUDA，建议在 GPU 环境中单独安装
+
+# ---------- 模型下载（二选一，按需安装） ----------
+# HuggingFace 官方下载工具（默认）
+# huggingface_hub>=0.20.0
+# ModelScope 下载工具（国内推荐，网络更稳定）
+# modelscope>=1.10.0

@@ -84,16 +84,22 @@ class RuntimeLogHandler(logging.Handler):
             extra = getattr(record, "run_id", None), getattr(record, "engine", None), getattr(record, "model_id", None)
             append_log(msg, level=level, run_id=extra[0], engine=extra[1], model_id=extra[2], ts=record.created)
         except Exception:
-            pass
+            # 不静默吞掉，至少打印到标准错误，避免日志丢失时无迹可寻
+            import sys, traceback
+            sys.stderr.write("RuntimeLogHandler emit 失败: " + traceback.format_exc())
 
 
 def install_app_log_handler() -> None:
-    """将 RuntimeLogHandler 挂到 services / api / core 的 logger，只收集本应用日志。"""
+    """将 RuntimeLogHandler 挂到 services / api / core 的 logger，只收集本应用日志。
+    幂等：多次调用不会重复添加 handler 或重复追加就绪日志。"""
     handler = RuntimeLogHandler()
     handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+    installed_any = False
     for name in ("services", "api", "core"):
         log = logging.getLogger(name)
         if any(isinstance(h, RuntimeLogHandler) for h in log.handlers):
             continue
         log.addHandler(handler)
-    append_log("运行日志已就绪；启动/停止模型时会在此显示引擎类型（Ollama、vLLM、SGLang）及 run_id。", level="INFO")
+        installed_any = True
+    if installed_any:
+        append_log("运行日志已就绪；启动/停止模型时会在此显示引擎类型（Ollama、vLLM、SGLang）及 run_id。", level="INFO")

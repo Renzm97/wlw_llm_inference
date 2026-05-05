@@ -39,14 +39,23 @@ _stop_model_impl = stop_model_impl
 _get_running_inferencer = get_running_inferencer
 _user_facing_start_error = user_facing_start_error
 
-# API 应用（供 uvicorn 或外部挂载）
+# API 应用（供 uvicorn 或外部挂载；延迟初始化避免导入副作用）
 try:
     from api import FASTAPI_AVAILABLE, create_app
-    app = create_app() if FASTAPI_AVAILABLE else None
 except ImportError:
     FASTAPI_AVAILABLE = False
     create_app = None
-    app = None
+
+_app_instance = None
+
+def _get_app():
+    global _app_instance
+    if _app_instance is None and FASTAPI_AVAILABLE and create_app:
+        _app_instance = create_app()
+    return _app_instance
+
+# 兼容旧直接引用
+app = _get_app() if FASTAPI_AVAILABLE else None
 
 # 测试入口（兼容旧命令行）
 from main import run_api_tests, run_core_tests

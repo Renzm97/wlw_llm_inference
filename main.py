@@ -13,12 +13,24 @@ import argparse
 import logging
 from typing import Optional
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# 仅在作为主程序运行时配置日志，避免作为库导入时污染宿主应用的日志配置
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 logger = logging.getLogger("main")
+
+
+def _try_download_for_test(model_id: str) -> Optional[str]:
+    """为测试下载模型并返回本地绝对路径；失败返回 None。"""
+    try:
+        from core import ensure_model_downloaded
+        return ensure_model_downloaded(model_id)
+    except Exception as e:
+        logger.info("  模型下载失败(%s): %s", model_id, e)
+        return None
 
 
 def run_core_tests() -> None:
@@ -43,7 +55,18 @@ def run_core_tests() -> None:
     logger.info("1. 引擎可用性检查")
     for eng in engines:
         try:
-            inf = LLMInferencer(engine_type=eng, model_name="llama3.2")
+            local_path: Optional[str] = None
+            if eng in ("vllm", "sglang"):
+                local_path = _try_download_for_test("llama3.2")
+
+            if eng == "vllm":
+                inf = LLMInferencer(
+                    engine_type=eng,
+                    model_name=local_path or "llama3.2",
+                    vllm_local_model_path=local_path,
+                )
+            else:
+                inf = LLMInferencer(engine_type=eng, model_name="llama3.2")
             if test_engine:
                 reusable_inf = inf
             logger.info("  %s: 可用", eng)
@@ -54,14 +77,36 @@ def run_core_tests() -> None:
 
     run_eng = test_engine or "ollama"
     try:
-        inf = reusable_inf if (reusable_inf and test_engine) else LLMInferencer(engine_type=run_eng, model_name="llama3.2")
+        local_path = None
+        if run_eng in ("vllm", "sglang"):
+            local_path = _try_download_for_test("llama3.2")
+
+        if run_eng == "vllm":
+            inf = reusable_inf if (reusable_inf and test_engine) else LLMInferencer(
+                engine_type=run_eng,
+                model_name=local_path or "llama3.2",
+                vllm_local_model_path=local_path,
+            )
+        else:
+            inf = reusable_inf if (reusable_inf and test_engine) else LLMInferencer(engine_type=run_eng, model_name="llama3.2")
         out = inf.generate("你好，请用一句话介绍你自己。", max_tokens=64)
         logger.info("2. 单轮推理(%s) 成功: %s", run_eng, out[:80] + "..." if len(out) > 80 else out)
     except Exception as e:
         logger.info("2. 单轮推理 跳过或失败: %s", e)
 
     try:
-        inf = reusable_inf if (reusable_inf and test_engine) else LLMInferencer(engine_type=run_eng, model_name="llama3.2")
+        local_path = None
+        if run_eng in ("vllm", "sglang"):
+            local_path = _try_download_for_test("llama3.2")
+
+        if run_eng == "vllm":
+            inf = reusable_inf if (reusable_inf and test_engine) else LLMInferencer(
+                engine_type=run_eng,
+                model_name=local_path or "llama3.2",
+                vllm_local_model_path=local_path,
+            )
+        else:
+            inf = reusable_inf if (reusable_inf and test_engine) else LLMInferencer(engine_type=run_eng, model_name="llama3.2")
         msgs = [
             {"role": "user", "content": "我叫小明。"},
             {"role": "assistant", "content": "你好小明！"},

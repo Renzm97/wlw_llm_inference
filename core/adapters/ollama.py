@@ -11,11 +11,10 @@ import httpx
 from core.adapters.base import BaseLLMAdapter
 from core.exceptions import EngineNotRunningError, ModelNotFoundError
 
+OLLAMA_AVAILABLE = True
 try:
-    import ollama
-    OLLAMA_AVAILABLE = True
+    import ollama  # noqa: F401
 except ImportError:
-    ollama = None
     OLLAMA_AVAILABLE = False
 
 logger = logging.getLogger("core.adapters.ollama")
@@ -30,8 +29,6 @@ class OllamaAdapter(BaseLLMAdapter):
         return "ollama"
 
     def is_available(self) -> bool:
-        if OLLAMA_AVAILABLE:
-            return True
         try:
             with httpx.Client(timeout=2.0) as c:
                 return c.get(f"{self.base_url}/api/tags").status_code == 200
@@ -50,7 +47,7 @@ class OllamaAdapter(BaseLLMAdapter):
                 names = [(m.get("model") or m.get("name") or "") for m in models_list]
                 logger.info("Ollama 已拉取模型列表 base_url=%s 数量=%s 列表=%s", self.base_url, len(names), names)
                 if model_name not in names and not any(
-                    n and (n == model_name or n.startswith(model_name + ":") or model_name in n) for n in names
+                    n and (n == model_name or n.startswith(model_name + ":")) for n in names
                 ):
                     raise ModelNotFoundError(f"模型 '{model_name}' 不在 Ollama 已拉取列表中。可用: {names}。")
         except httpx.RequestError as e:
@@ -58,7 +55,6 @@ class OllamaAdapter(BaseLLMAdapter):
             raise EngineNotRunningError(f"无法连接 Ollama: {e}")
 
     def generate(self, prompt: str, *, model_name: str, temperature: float = 0.7, max_tokens: int = 1024, top_p: float = 0.95, **kwargs: Any) -> str:
-        self.check_service(model_name)
         payload = {
             "model": model_name,
             "prompt": prompt,
@@ -72,7 +68,6 @@ class OllamaAdapter(BaseLLMAdapter):
             return r.json().get("response", "").strip()
 
     def chat(self, messages: List[Dict[str, str]], *, model_name: str, temperature: float = 0.7, max_tokens: int = 1024, top_p: float = 0.95, **kwargs: Any) -> str:
-        self.check_service(model_name)
         payload = {
             "model": model_name,
             "messages": messages,
