@@ -26,12 +26,25 @@
   --sidebar-width: 300px;
 }
 
+html {
+  scrollbar-width: none;
+}
+
+html::-webkit-scrollbar {
+  display: none;
+}
+
 body {
   font-family: 'Microsoft YaHei', Arial, sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   overflow-x: hidden;
   min-height: 100vh;
+  scrollbar-width: none;
+}
+
+body::-webkit-scrollbar {
+  display: none;
 }
 
 /* 主容器：左参数配置 + 右内容 */
@@ -325,6 +338,25 @@ input:checked + .slider::before {
   padding: 12px;
   max-height: 280px;
   overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(30, 136, 229, 0.25) transparent;
+}
+
+.log-wrap::-webkit-scrollbar {
+  width: 5px;
+}
+
+.log-wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-wrap::-webkit-scrollbar-thumb {
+  background: rgba(30, 136, 229, 0.25);
+  border-radius: 3px;
+}
+
+.log-wrap::-webkit-scrollbar-thumb:hover {
+  background: rgba(30, 136, 229, 0.45);
 }
 
 .log-content {

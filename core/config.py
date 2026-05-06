@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import time
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("core.config")
@@ -191,6 +193,65 @@ if not MODELS_CATALOG:
 # 依赖 BUILTIN_MODELS 的代码应优先使用 get_model_variant() 或搜索 MODELS_CATALOG
 
 
+def _verify_model_dir(local_dir: str) -> None:
+    """
+    验证模型目录完整性，防止 snapshot_download 返回成功但实际文件缺失
+    （ModelScope 在个别文件下载失败时仍可能正常返回）。
+    检查项：
+      1. 不存在明确的下载中断标记文件（如 .incomplete、*.tmp、*.part）
+      2. 若存在 model.safetensors.index.json 或 pytorch_model.bin.index.json，
+         则解析并确认所有引用的权重文件均存在
+      3. 若无索引文件，至少应存在一个权重文件（.safetensors/.bin/.pth/.ckpt）
+    验证通过则静默返回，否则抛出 RuntimeError。
+    """
+    # 1) 检查明确的下载中断标记（只检查文件，不检查 ModelScope/HF 的正常缓存目录如 ._____temp）
+    for root, dirs, files in os.walk(local_dir):
+        for name in files:
+            lower = name.lower()
+            if lower.endswith((".incomplete", ".tmp", ".temp", ".part", ".download")):
+                raise RuntimeError(f"发现未完成的下载标记文件: {os.path.join(root, name)}")
+        # 避免深入隐藏目录（如 .git、._____temp），它们不影响模型加载
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+
+    # 2) 尝试通过索引文件校验权重完整性
+    index_files = [
+        os.path.join(local_dir, "model.safetensors.index.json"),
+        os.path.join(local_dir, "pytorch_model.bin.index.json"),
+        os.path.join(local_dir, "model.ckpt.index.json"),
+    ]
+    weight_found = False
+    for idx_path in index_files:
+        if not os.path.isfile(idx_path):
+            continue
+        try:
+            with open(idx_path, "r", encoding="utf-8") as f:
+                idx_data = json.load(f)
+        except Exception as e:
+            raise RuntimeError(f"索引文件损坏或无法解析: {idx_path}: {e}")
+        weight_map = idx_data.get("weight_map") if isinstance(idx_data, dict) else None
+        if not isinstance(weight_map, dict):
+            continue
+        missing = []
+        for filename in set(weight_map.values()):
+            fpath = os.path.join(local_dir, filename)
+            if not os.path.isfile(fpath):
+                missing.append(filename)
+        if missing:
+            raise RuntimeError(f"索引文件引用的权重文件缺失 ({len(missing)} 个): {missing[:5]}{'...' if len(missing) > 5 else ''}")
+        weight_found = True
+        break
+
+    if not weight_found:
+        # 3) 无索引文件时，至少需要一个常见权重文件
+        has_weight = False
+        for entry in os.listdir(local_dir):
+            if entry.lower().endswith((".safetensors", ".bin", ".pth", ".ckpt")):
+                has_weight = True
+                break
+        if not has_weight:
+            raise RuntimeError("目录中未找到任何模型权重文件（.safetensors/.bin/.pth/.ckpt）")
+
+
 def ensure_model_downloaded(model_id: str, size: Optional[str] = None, quantization: Optional[str] = None) -> str:
     """
     确保模型已下载到平台模型目录，返回本地绝对路径（供 vLLM/SGLang 直接加载）。
@@ -201,7 +262,7 @@ def ensure_model_downloaded(model_id: str, size: Optional[str] = None, quantizat
     下载源由 config.json 中的 model_source 控制（"huggingface" 或 "modelscope"）。
     当 source 为 modelscope 时会优先使用 ms_repo，若未配置则回退到 hf_repo。
     """
-    from core.exceptions import EngineNotInstalledError, ModelNotFoundError
+    from core.exceptions import EngineNotInstalledError, EngineNotRunningError, InvalidParameterError, ModelNotFoundError
 
     hf_repo: Optional[str] = None
     ms_repo: Optional[str] = None
@@ -263,24 +324,81 @@ def ensure_model_downloaded(model_id: str, size: Optional[str] = None, quantizat
     local_dir_name = f"{model_id}-{quantization}" if (quantization and quantization != "none") else model_id
     local_dir = os.path.join(get_platform_models_dir(), local_dir_name)
     if os.path.isfile(os.path.join(local_dir, "config.json")):
-        logger.info("模型 %s 已存在于本地目录: %s", model_id, local_dir)
-        return local_dir
+        try:
+            _verify_model_dir(local_dir)
+            logger.info("模型 %s 已存在于本地目录且校验通过: %s", model_id, local_dir)
+            return local_dir
+        except RuntimeError as verify_err:
+            logger.warning("模型 %s 本地目录校验失败，将重新下载: %s", model_id, verify_err)
+            # 尝试清理损坏的目录后重新下载
+            try:
+                shutil.rmtree(local_dir)
+            except Exception:
+                pass
     os.makedirs(local_dir, exist_ok=True)
 
-    local_path: str = ""
+    # 先检查依赖是否安装，避免被外层异常捕获
+    snapshot_download = None
     if model_source == "modelscope":
         try:
-            from modelscope import snapshot_download
+            from modelscope import snapshot_download as _ms_download
+            snapshot_download = _ms_download
         except ImportError:
             raise EngineNotInstalledError("请安装 modelscope: pip install modelscope")
-        logger.info("使用 ModelScope 下载模型: %s -> %s", repo_id, local_dir)
-        local_path = snapshot_download(model_id=repo_id, local_dir=local_dir)
     else:
-        # 默认 huggingface
         try:
-            from huggingface_hub import snapshot_download
+            from huggingface_hub import snapshot_download as _hf_download
+            snapshot_download = _hf_download
         except ImportError:
             raise EngineNotInstalledError("请安装 huggingface_hub: pip install huggingface_hub")
-        logger.info("使用 HuggingFace 下载模型: %s -> %s", repo_id, local_dir)
-        local_path = snapshot_download(repo_id=repo_id, local_dir=local_dir)
+
+    local_path: str = ""
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, 4):
+        try:
+            if model_source == "modelscope":
+                logger.info("使用 ModelScope 下载模型: %s -> %s (第 %s 次尝试)", repo_id, local_dir, attempt)
+                local_path = snapshot_download(model_id=repo_id, local_dir=local_dir)
+            else:
+                logger.info("使用 HuggingFace 下载模型: %s -> %s (第 %s 次尝试)", repo_id, local_dir, attempt)
+                local_path = snapshot_download(repo_id=repo_id, local_dir=local_dir)
+            # snapshot_download 可能返回成功但部分文件缺失，必须校验
+            _verify_model_dir(local_path if local_path else local_dir)
+            break
+        except Exception as e:
+            last_exc = e
+            logger.warning("下载模型 %s 第 %s 次尝试失败: %s", repo_id, attempt, e)
+            # 清理临时目录，避免残留影响下次重试
+            for temp_name in ("._____temp", ".huggingface", ".tmp"):
+                temp_path = os.path.join(local_dir, temp_name)
+                if os.path.exists(temp_path):
+                    try:
+                        shutil.rmtree(temp_path)
+                    except Exception:
+                        pass
+            if attempt < 3:
+                time.sleep(3)
+            else:
+                break
+
+    if last_exc is not None:
+        err_type = type(last_exc).__name__
+        err_msg = str(last_exc).lower()
+        # 清理空目录，避免下次误判为已下载
+        try:
+            if os.path.isdir(local_dir) and not os.listdir(local_dir):
+                os.rmdir(local_dir)
+        except Exception:
+            pass
+        if err_type == "GatedRepoError" or "gated repo" in err_msg:
+            raise ModelNotFoundError(
+                f"模型 {repo_id} 为 HuggingFace 受限仓库（gated），"
+                f"请先访问 https://huggingface.co/{repo_id} 接受使用条款，"
+                f"并在 config.json 中配置 hf_token 或设置 HF_TOKEN 环境变量后重试"
+            ) from last_exc
+        if err_type == "RepositoryNotFoundError" or "not found" in err_msg:
+            raise ModelNotFoundError(
+                f"模型仓库 {repo_id} 在 HuggingFace/ModelScope 上不存在，请检查 model_id 与 size 配置"
+            ) from last_exc
+        raise EngineNotRunningError(f"下载模型 {repo_id} 失败: {last_exc}") from last_exc
     return local_path if local_path else local_dir
